@@ -44,11 +44,19 @@ type Member struct {
 	MaxConcurrent int // requests in flight before the backend counts as full
 }
 
+// Observer is told about routing decisions and completed leases, for metrics.
+// Methods are called without the pool lock held and must not block.
+type Observer interface {
+	Picked(backend string, policy Policy)
+	Released(backend string, d time.Duration, err error)
+}
+
 // Options configure a Pool. Zero values mean: round robin, no queue.
 type Options struct {
 	Policy   Policy
 	MaxQueue int // requests allowed to wait for capacity; 0 rejects immediately
 	Log      *slog.Logger
+	Observer Observer // optional
 }
 
 // BackendStats is a point-in-time view of one backend.
@@ -86,6 +94,7 @@ type Router interface {
 
 // Pool implements Router.
 type Pool struct {
+	obs      Observer
 	policy   Policy
 	maxQueue int
 	log      *slog.Logger
@@ -98,7 +107,7 @@ type Pool struct {
 }
 
 func NewPool(members []Member, opts Options) *Pool {
-	p := &Pool{policy: opts.Policy, maxQueue: opts.MaxQueue, log: opts.Log, wake: make(chan struct{})}
+	p := &Pool{obs: opts.Observer, policy: opts.Policy, maxQueue: opts.MaxQueue, log: opts.Log, wake: make(chan struct{})}
 	if p.policy == "" {
 		p.policy = RoundRobin
 	}
@@ -178,6 +187,9 @@ func (p *Pool) Acquire(ctx context.Context, exclude ...string) (*Lease, error) {
 			m := p.pick(cands)
 			m.active++
 			p.mu.Unlock()
+			if p.obs != nil {
+				p.obs.Picked(m.Backend.Name(), p.policy)
+			}
 			return &Lease{Backend: m.Backend, pool: p, m: m, start: time.Now()}, nil
 		}
 		if !anyHealthy {
@@ -267,6 +279,9 @@ func (l *Lease) Release(err error) {
 	l.once.Do(func() {
 		d := time.Since(l.start)
 		p := l.pool
+		if p.obs != nil {
+			defer p.obs.Released(l.Backend.Name(), d, err)
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		l.m.active--
