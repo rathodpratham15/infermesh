@@ -14,6 +14,7 @@ import (
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
 	"github.com/rathodpratham15/infermesh/internal/config"
+	"github.com/rathodpratham15/infermesh/internal/events"
 	"github.com/rathodpratham15/infermesh/internal/gateway"
 	"github.com/rathodpratham15/infermesh/internal/metrics"
 	"github.com/rathodpratham15/infermesh/internal/router"
@@ -74,6 +75,16 @@ func run() error {
 	gw.MaxRetries = cfg.MaxRetries
 	gw.RequestTimeout = cfg.RequestTimeout
 	gw.Metrics = m
+	if len(cfg.KafkaBrokers) > 0 {
+		pub, err := events.NewKafka(events.KafkaConfig{Brokers: cfg.KafkaBrokers, Topic: cfg.KafkaTopic, Reporter: m})
+		if err != nil {
+			return fmt.Errorf("kafka: %w", err)
+		}
+		gw.Events = pub
+		log.Info("telemetry events enabled", "brokers", cfg.KafkaBrokers, "topic", cfg.KafkaTopic)
+	} else {
+		log.Info("telemetry events disabled (KAFKA_BROKERS not set)")
+	}
 	log.Info("routing configured", "policy", cfg.RoutingPolicy, "max_retries", cfg.MaxRetries, "max_queue", cfg.MaxQueue)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -101,6 +112,9 @@ func run() error {
 	}
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer flushCancel()
+	if err := gw.Events.Close(flushCtx); err != nil {
+		log.Warn("flushing telemetry events", "err", err)
+	}
 	if err := shutdownTracing(flushCtx); err != nil {
 		log.Warn("flushing traces", "err", err)
 	}

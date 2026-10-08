@@ -35,6 +35,20 @@ func TestRoutingSettings(t *testing.T) {
 	}
 }
 
+func TestKafkaSettings(t *testing.T) {
+	d, _ := LoadFrom(env(nil))
+	if len(d.KafkaBrokers) != 0 || d.KafkaTopic != DefaultKafkaTopic {
+		t.Fatalf("kafka should be disabled by default: %+v", d)
+	}
+	c, err := LoadFrom(env(map[string]string{"KAFKA_BROKERS": "k1:9092, k2:9092", "KAFKA_TOPIC": "t"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.KafkaBrokers) != 2 || c.KafkaBrokers[1] != "k2:9092" || c.KafkaTopic != "t" {
+		t.Fatalf("unexpected: %+v", c)
+	}
+}
+
 func TestAllowedOrigins(t *testing.T) {
 	c, err := LoadFrom(env(map[string]string{"WS_ALLOWED_ORIGINS": "localhost:5173, example.com ,"}))
 	if err != nil {

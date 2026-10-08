@@ -9,6 +9,20 @@ import (
 	"time"
 )
 
+// DefaultKafkaTopic is where the gateway publishes and the consumer reads.
+const DefaultKafkaTopic = "infermesh.inference.events"
+
+// SplitList splits a comma-separated list, trimming blanks.
+func SplitList(v string) []string {
+	var out []string
+	for _, x := range strings.Split(v, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 type Backend struct {
 	Name          string
 	Kind          string // mock | vllm | triton
@@ -29,6 +43,8 @@ type Config struct {
 	MaxQueue        int           // requests allowed to wait for capacity
 	RequestTimeout  time.Duration // whole-request budget at the gateway
 	HealthInterval  time.Duration
+	KafkaBrokers    []string // empty disables telemetry events
+	KafkaTopic      string
 	Backends        []Backend
 }
 
@@ -45,6 +61,8 @@ func Load() (Config, error) { return LoadFrom(os.Getenv) }
 //	MAX_QUEUE             requests allowed to wait for capacity, default 128
 //	REQUEST_TIMEOUT       whole-request budget, default 2m
 //	HEALTH_INTERVAL       backend health probe period, default 5s
+//	KAFKA_BROKERS         comma list; empty disables telemetry events
+//	KAFKA_TOPIC           default infermesh.inference.events
 //	WS_ALLOWED_ORIGINS    comma list of browser origins allowed on the WebSocket
 //	BACKENDS              comma list of names, default "mock"
 //	BACKEND_<NAME>_KIND   mock|vllm|triton (default: the name itself)
@@ -59,17 +77,15 @@ func LoadFrom(get func(string) string) (Config, error) {
 		MaxQueue:        128,
 		RequestTimeout:  2 * time.Minute,
 		HealthInterval:  5 * time.Second,
+		KafkaTopic:      or(get("KAFKA_TOPIC"), DefaultKafkaTopic),
+		KafkaBrokers:    SplitList(get("KAFKA_BROKERS")),
 	}
 	switch c.RoutingPolicy {
 	case "round_robin", "least_outstanding", "weighted":
 	default:
 		return c, fmt.Errorf("ROUTING_POLICY: unknown policy %q", c.RoutingPolicy)
 	}
-	for _, o := range strings.Split(get("WS_ALLOWED_ORIGINS"), ",") {
-		if o = strings.TrimSpace(o); o != "" {
-			c.AllowedOrigins = append(c.AllowedOrigins, o)
-		}
-	}
+	c.AllowedOrigins = SplitList(get("WS_ALLOWED_ORIGINS"))
 	var err error
 	if v := get("SHUTDOWN_TIMEOUT"); v != "" {
 		if c.ShutdownTimeout, err = time.ParseDuration(v); err != nil {

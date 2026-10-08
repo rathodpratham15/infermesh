@@ -95,6 +95,7 @@ plus the current queue depth.
 | `ROUTING_POLICY` | `round_robin`, `least_outstanding`, `weighted` | `round_robin` |
 | `MAX_RETRIES` / `MAX_QUEUE` | retries on another backend / requests allowed to wait | `1` / `128` |
 | `REQUEST_TIMEOUT` / `HEALTH_INTERVAL` | whole-request budget / health probe period | `2m` / `5s` |
+| `KAFKA_BROKERS` / `KAFKA_TOPIC` | telemetry events to Kafka (see `telemetry-events.md`) | disabled / `infermesh.inference.events` |
 | `WS_ALLOWED_ORIGINS` | browser origins allowed on the WebSocket | none (same-origin only) |
 | `LISTEN_ADDR`, `SHUTDOWN_TIMEOUT`, `LOG_LEVEL` | gateway process | `:8080`, `15s`, `info` |
 
