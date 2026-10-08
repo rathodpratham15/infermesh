@@ -61,6 +61,27 @@ Errors that happen before the first token are normal JSON errors (502/504). Afte
 the first token the HTTP status is already sent, so SSE reports a failure as a
 final `data: {"error": ...}` event. Closing the connection cancels the backend call.
 
+## Routing and concurrency
+
+Policies (`ROUTING_POLICY`):
+
+- `round_robin`: rotate through healthy backends that have a free slot.
+- `least_outstanding`: send to the backend with the fewest in-flight requests; ties rotate.
+- `weighted`: smooth weighted round robin using `BACKEND_<NAME>_WEIGHT` (a 3:1 weight gives an exact 3:1 split).
+
+Each backend accepts at most `BACKEND_<NAME>_MAX_CONCURRENT` requests at once. When every
+healthy backend is full, up to `MAX_QUEUE` requests wait for a slot (bounded by `REQUEST_TIMEOUT`);
+beyond that the gateway sheds load with `429` and `Retry-After`. With no healthy backend it
+returns `503`.
+
+Health is probed every `HEALTH_INTERVAL` and cached, so routing never makes a network call just
+to pick a backend. A failed attempt that is retryable (5xx, 429, connection errors) is retried on
+a *different* backend up to `MAX_RETRIES` times, but only before any output has reached the
+client. Timeouts, cancellations and 4xx responses are not retried.
+
+`GET /v1/backends` shows per-backend active/completed/failure counts, latency EWMA and health,
+plus the current queue depth.
+
 ## Configuration
 
 | Variable | Meaning | Default |
@@ -70,7 +91,10 @@ final `data: {"error": ...}` event. Closing the connection cancels the backend c
 | `BACKEND_<NAME>_URL` | engine base URL (required for `vllm`) | - |
 | `BACKEND_<NAME>_MODEL` | model sent upstream; overrides the request's | request's |
 | `BACKEND_<NAME>_TIMEOUT` | per-request timeout (covers a whole stream) | `60s` |
-| `BACKEND_<NAME>_WEIGHT` / `_MAX_CONCURRENT` | used by routing (Phase 5) | `1` / `64` |
+| `BACKEND_<NAME>_WEIGHT` / `_MAX_CONCURRENT` | weighted routing share / in-flight limit | `1` / `64` |
+| `ROUTING_POLICY` | `round_robin`, `least_outstanding`, `weighted` | `round_robin` |
+| `MAX_RETRIES` / `MAX_QUEUE` | retries on another backend / requests allowed to wait | `1` / `128` |
+| `REQUEST_TIMEOUT` / `HEALTH_INTERVAL` | whole-request budget / health probe period | `2m` / `5s` |
 | `WS_ALLOWED_ORIGINS` | browser origins allowed on the WebSocket | none (same-origin only) |
 | `LISTEN_ADDR`, `SHUTDOWN_TIMEOUT`, `LOG_LEVEL` | gateway process | `:8080`, `15s`, `info` |
 

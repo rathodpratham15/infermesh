@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,10 +14,19 @@ import (
 	"github.com/rathodpratham15/infermesh/internal/router"
 )
 
+// testRouter wraps backends in a pool with generous limits.
+func testRouter(bs ...backend.InferenceBackend) *router.Pool {
+	var ms []router.Member
+	for _, b := range bs {
+		ms = append(ms, router.Member{Backend: b, Weight: 1, MaxConcurrent: 100})
+	}
+	return router.NewPool(ms, router.Options{MaxQueue: 10})
+}
+
 func newTestServer(t *testing.T) (*httptest.Server, *backend.Mock) {
 	t.Helper()
 	m := backend.NewMock("mock", 0)
-	s := New(router.NewFirst([]backend.InferenceBackend{m}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(testRouter(m), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts, m
@@ -79,7 +89,10 @@ func TestRequestIDPropagates(t *testing.T) {
 }
 
 func TestHealthAndReadiness(t *testing.T) {
-	ts, m := newTestServer(t)
+	m := backend.NewMock("mock", 0)
+	pool := testRouter(m)
+	ts := httptest.NewServer(New(pool, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	defer ts.Close()
 	get := func(p string) int {
 		resp, err := http.Get(ts.URL + p)
 		if err != nil {
@@ -98,7 +111,9 @@ func TestHealthAndReadiness(t *testing.T) {
 	if get("/readyz") != 503 {
 		t.Fatal("readiness should fail with no healthy backend")
 	}
+	// Routing uses cached health, refreshed by the periodic check.
+	pool.CheckHealth(context.Background())
 	if resp := post(t, ts.URL, `{"messages":[{"role":"user","content":"x"}]}`); resp.StatusCode != 503 {
-		t.Fatalf("expected 503 with no backend, got %d", resp.StatusCode)
+		t.Fatalf("expected 503 with no healthy backend, got %d", resp.StatusCode)
 	}
 }

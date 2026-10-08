@@ -32,26 +32,36 @@ func run() error {
 	}
 	log := newLogger(cfg.LogLevel)
 
-	var backends []backend.InferenceBackend
+	policy, err := router.ParsePolicy(cfg.RoutingPolicy)
+	if err != nil {
+		return err
+	}
+	var members []router.Member
 	for _, bc := range cfg.Backends {
 		be, err := newBackend(bc)
 		if err != nil {
 			return err
 		}
-		backends = append(backends, be)
-		log.Info("backend configured", "name", bc.Name, "kind", bc.Kind)
+		members = append(members, router.Member{Backend: be, Weight: bc.Weight, MaxConcurrent: bc.MaxConcurrent})
+		log.Info("backend configured", "name", bc.Name, "kind", bc.Kind, "weight", bc.Weight, "max_concurrent", bc.MaxConcurrent)
 	}
+	pool := router.NewPool(members, router.Options{Policy: policy, MaxQueue: cfg.MaxQueue, Log: log})
 
-	gw := gateway.New(router.NewFirst(backends), log)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	pool.CheckHealth(ctx)
+	go pool.RunHealthChecks(ctx, cfg.HealthInterval)
+
+	gw := gateway.New(pool, log)
 	gw.AllowedOrigins = cfg.AllowedOrigins
+	gw.MaxRetries = cfg.MaxRetries
+	gw.RequestTimeout = cfg.RequestTimeout
+	log.Info("routing configured", "policy", cfg.RoutingPolicy, "max_retries", cfg.MaxRetries, "max_queue", cfg.MaxQueue)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           gw.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {

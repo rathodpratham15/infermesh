@@ -17,7 +17,6 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
-	"github.com/rathodpratham15/infermesh/internal/router"
 )
 
 // scriptBackend lets a test control Stream exactly.
@@ -36,7 +35,7 @@ func (b scriptBackend) Stream(ctx context.Context, req backend.Request) (<-chan 
 
 func serverFor(t *testing.T, b backend.InferenceBackend) *httptest.Server {
 	t.Helper()
-	s := New(router.NewFirst([]backend.InferenceBackend{b}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(testRouter(b), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts

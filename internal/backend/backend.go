@@ -2,7 +2,13 @@
 // engines (vLLM, Triton, ...). The gateway only ever sees this interface.
 package backend
 
-import "context"
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+)
 
 type Message struct {
 	Role    string
@@ -43,4 +49,20 @@ type InferenceBackend interface {
 	Health(ctx context.Context) error
 	Generate(ctx context.Context, req Request) (Response, error)
 	Stream(ctx context.Context, req Request) (<-chan Token, error)
+}
+
+// Retryable reports whether a failed attempt is worth repeating on another
+// backend: server-side failures (5xx, 429) and connection-level errors.
+// Cancellations and timeouts are not retried (the client left or the budget is
+// spent), and neither are 4xx responses, which another backend would repeat.
+func Retryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.Status == http.StatusTooManyRequests || he.Status >= 500
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }

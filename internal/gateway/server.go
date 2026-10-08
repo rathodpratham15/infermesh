@@ -26,16 +26,22 @@ type Server struct {
 	// open a WebSocket from a browser. Same-origin and non-browser clients
 	// are always allowed.
 	AllowedOrigins []string
+	// MaxRetries is the number of extra attempts on a different backend after a
+	// retryable failure (before any output has reached the client).
+	MaxRetries int
+	// RequestTimeout bounds a whole request, including time spent queued.
+	RequestTimeout time.Duration
 }
 
 func New(r router.Router, log *slog.Logger) *Server {
-	return &Server{router: r, log: log, now: time.Now}
+	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.HandleFunc("GET /v1/backends", s.backends)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
 	mux.HandleFunc("GET /v1/chat/stream", s.chatWebSocket)
 	return s.withRequestID(mux)
@@ -118,12 +124,72 @@ func (c chatRequest) toBackend(id string) backend.Request {
 	return br
 }
 
-// upstreamStatus maps a backend error to the HTTP status returned to the client.
+// upstreamStatus maps a routing or backend error to the HTTP status returned
+// to the client.
 func upstreamStatus(err error) int {
-	if errors.Is(err, context.DeadlineExceeded) {
+	switch {
+	case errors.Is(err, router.ErrQueueFull):
+		return http.StatusTooManyRequests
+	case errors.Is(err, router.ErrNoBackend):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout
 	}
 	return http.StatusBadGateway
+}
+
+func errorType(err error) string {
+	switch {
+	case errors.Is(err, router.ErrQueueFull):
+		return "rate_limit_error"
+	case errors.Is(err, router.ErrNoBackend):
+		return "backend_unavailable"
+	}
+	return "backend_error"
+}
+
+func (s *Server) writeUpstreamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, router.ErrQueueFull) {
+		w.Header().Set("Retry-After", "1")
+	}
+	writeError(w, upstreamStatus(err), errorType(err), err.Error())
+}
+
+// withTimeout applies the gateway-wide request budget.
+func (s *Server) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.RequestTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, s.RequestTimeout)
+}
+
+// attempt runs fn against a backend leased from the router, retrying on a
+// different backend while the error is retryable and the budget allows. fn must
+// release the lease itself unless it returns an error, in which case attempt
+// releases it.
+func (s *Server) attempt(ctx context.Context, id string, fn func(*router.Lease) error) error {
+	var tried []string
+	var last error
+	for n := 0; ; n++ {
+		lease, err := s.router.Acquire(ctx, tried...)
+		if err != nil {
+			if last != nil && errors.Is(err, router.ErrNoBackend) {
+				return last // nothing left to retry on: report the real failure
+			}
+			return err
+		}
+		err = fn(lease)
+		if err == nil {
+			return nil
+		}
+		lease.Release(err)
+		last = err
+		tried = append(tried, lease.Backend.Name())
+		if n >= s.MaxRetries || !backend.Retryable(err) {
+			return err
+		}
+		s.log.Warn("retrying on another backend", "request_id", id, "failed_backend", lease.Backend.Name(), "attempt", n+1, "err", err)
+	}
 }
 
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -131,28 +197,36 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id := requestID(r.Context())
-	be, err := s.router.Pick(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
-		return
-	}
+	ctx, cancel := s.withTimeout(r.Context())
+	defer cancel()
+	id := requestID(ctx)
+
 	if req.Stream {
-		s.streamSSE(w, r, req, be, id)
+		s.streamSSE(ctx, w, req, id)
 		return
 	}
 
+	var resp backend.Response
+	var served string
 	start := s.now()
-	resp, err := be.Generate(r.Context(), req.toBackend(id))
+	err := s.attempt(ctx, id, func(l *router.Lease) error {
+		var err error
+		if resp, err = l.Backend.Generate(ctx, req.toBackend(id)); err != nil {
+			return err
+		}
+		served = l.Backend.Name()
+		l.Release(nil)
+		return nil
+	})
 	if err != nil {
-		s.log.Error("generate failed", "request_id", id, "backend", be.Name(), "err", err)
-		writeError(w, upstreamStatus(err), "backend_error", err.Error())
+		s.log.Error("generate failed", "request_id", id, "err", err)
+		s.writeUpstreamError(w, err)
 		return
 	}
-	s.log.Info("generate ok", "request_id", id, "backend", be.Name(),
+	s.log.Info("generate ok", "request_id", id, "backend", served,
 		"latency_ms", s.now().Sub(start).Milliseconds(), "output_tokens", resp.Usage.CompletionTokens)
 
-	w.Header().Set("X-InferMesh-Backend", be.Name())
+	w.Header().Set("X-InferMesh-Backend", served)
 	writeJSON(w, http.StatusOK, chatResponse{
 		ID:      id,
 		Object:  "chat.completion",
@@ -161,6 +235,11 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: resp.Content}, FinishReason: resp.FinishReason}},
 		Usage:   toUsage(resp.Usage),
 	})
+}
+
+// backends reports per-backend routing state for debugging and dashboards.
+func (s *Server) backends(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"queue_depth": s.router.QueueDepth(), "backends": s.router.Stats()})
 }
 
 func toUsage(u backend.Usage) usage {

@@ -17,6 +17,24 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestRoutingSettings(t *testing.T) {
+	c, err := LoadFrom(env(map[string]string{
+		"ROUTING_POLICY": "least_outstanding", "MAX_RETRIES": "3", "MAX_QUEUE": "10",
+		"REQUEST_TIMEOUT": "30s", "HEALTH_INTERVAL": "1s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RoutingPolicy != "least_outstanding" || c.MaxRetries != 3 || c.MaxQueue != 10 ||
+		c.RequestTimeout != 30*time.Second || c.HealthInterval != time.Second {
+		t.Fatalf("unexpected: %+v", c)
+	}
+	d, _ := LoadFrom(env(nil))
+	if d.RoutingPolicy != "round_robin" || d.MaxRetries != 1 || d.MaxQueue != 128 {
+		t.Fatalf("unexpected defaults: %+v", d)
+	}
+}
+
 func TestAllowedOrigins(t *testing.T) {
 	c, err := LoadFrom(env(map[string]string{"WS_ALLOWED_ORIGINS": "localhost:5173, example.com ,"}))
 	if err != nil {
@@ -51,12 +69,16 @@ func TestMultipleBackends(t *testing.T) {
 
 func TestErrors(t *testing.T) {
 	cases := map[string]map[string]string{
-		"missing url":  {"BACKENDS": "vllm"},
-		"unknown kind": {"BACKENDS": "foo"},
-		"duplicate":    {"BACKENDS": "mock,mock"},
-		"bad weight":   {"BACKENDS": "mock", "BACKEND_MOCK_WEIGHT": "0"},
-		"bad timeout":  {"BACKENDS": "mock", "BACKEND_MOCK_TIMEOUT": "soon"},
-		"bad shutdown": {"SHUTDOWN_TIMEOUT": "x"},
+		"missing url":     {"BACKENDS": "vllm"},
+		"unknown kind":    {"BACKENDS": "foo"},
+		"duplicate":       {"BACKENDS": "mock,mock"},
+		"bad weight":      {"BACKENDS": "mock", "BACKEND_MOCK_WEIGHT": "0"},
+		"bad timeout":     {"BACKENDS": "mock", "BACKEND_MOCK_TIMEOUT": "soon"},
+		"bad policy":      {"ROUTING_POLICY": "random"},
+		"bad retries":     {"MAX_RETRIES": "-1"},
+		"bad queue":       {"MAX_QUEUE": "x"},
+		"bad req timeout": {"REQUEST_TIMEOUT": "0s"},
+		"bad shutdown":    {"SHUTDOWN_TIMEOUT": "x"},
 	}
 	for name, m := range cases {
 		if _, err := LoadFrom(env(m)); err == nil {
