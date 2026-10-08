@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"io"
 	"net/http"
 	"strings"
@@ -134,6 +136,7 @@ func (v *VLLM) newRequest(ctx context.Context, req Request, stream bool) (*http.
 		return nil, err
 	}
 	hr.Header.Set("Content-Type", "application/json")
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(hr.Header))
 	if req.ID != "" {
 		hr.Header.Set("X-Request-ID", req.ID)
 	}

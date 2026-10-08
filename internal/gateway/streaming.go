@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"time"
 
@@ -30,7 +32,7 @@ type openedStream struct {
 // caller owns the lease and must Release it when the stream ends.
 func (s *Server) openStream(ctx context.Context, id string, req chatRequest) (*openedStream, error) {
 	var out *openedStream
-	err := s.attempt(ctx, id, func(l *router.Lease) error {
+	err := s.attempt(ctx, id, func(ctx context.Context, l *router.Lease) error {
 		started := s.now()
 		ch, err := l.Backend.Stream(ctx, req.toBackend(id))
 		if err != nil {
@@ -98,6 +100,7 @@ func (s *Server) streamSSE(ctx context.Context, w http.ResponseWriter, req chatR
 	for tok, more := st.first, true; more; tok, more = <-st.ch {
 		if tok.Err != nil {
 			streamErr = tok.Err
+			s.Metrics.StreamAborted(ctx, "chat")
 			s.log.Error("stream aborted", "request_id", id, "backend", be.Name(), "err", tok.Err)
 			// Headers are already sent; report in-band like OpenAI does.
 			_, _ = fmt.Fprintf(w, "data: {\"error\":{\"message\":%q,\"type\":\"backend_error\"}}\n\n", tok.Err.Error())
@@ -135,8 +138,12 @@ func (s *Server) streamSSE(ctx context.Context, w http.ResponseWriter, req chatR
 	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	_ = rc.Flush()
+	total := s.now().Sub(st.started)
+	if final.Usage != nil {
+		s.Metrics.Generation(ctx, be.Name(), &ttft, total, *final.Usage)
+	}
 	s.log.Info("stream ok", "request_id", id, "backend", be.Name(),
-		"ttft_ms", ttft.Milliseconds(), "total_ms", s.now().Sub(st.started).Milliseconds(), "chunks", tokens)
+		"ttft_ms", ttft.Milliseconds(), "total_ms", total.Milliseconds(), "chunks", tokens)
 }
 
 // chatWebSocket streams one completion over a WebSocket. The client sends a
@@ -144,9 +151,17 @@ func (s *Server) streamSSE(ctx context.Context, w http.ResponseWriter, req chatR
 // (start, token..., done) or a single error frame, then closes.
 func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	id := requestID(r.Context())
+	start := s.now()
+	status := http.StatusSwitchingProtocols
+	s.Metrics.InFlight(r.Context(), 1, "ws")
+	defer func() {
+		s.Metrics.InFlight(r.Context(), -1, "ws")
+		s.Metrics.Request(r.Context(), "ws", status, s.now().Sub(start))
+	}()
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.AllowedOrigins})
 	if err != nil {
 		s.log.Warn("websocket accept failed", "request_id", id, "err", err)
+		status = http.StatusBadRequest
 		return
 	}
 	defer func() { _ = conn.CloseNow() }()
@@ -162,10 +177,12 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	err = wsjson.Read(readCtx, conn, &req)
 	cancelRead()
 	if err != nil {
+		status = http.StatusBadRequest
 		fail(websocket.StatusInvalidFramePayloadData, "expected a JSON chat request: "+err.Error())
 		return
 	}
 	if err := req.validate(); err != nil {
+		status = http.StatusBadRequest
 		fail(websocket.StatusPolicyViolation, err.Error())
 		return
 	}
@@ -174,10 +191,15 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	// disconnects, which in turn cancels the backend call.
 	ctx, cancel := s.withTimeout(conn.CloseRead(r.Context()))
 	defer cancel()
+	ctx, span := tracer().Start(ctx, "chat.stream.ws", trace.WithAttributes(
+		attribute.String("infermesh.request_id", id), attribute.String("infermesh.model", req.Model)))
+	defer span.End()
 
 	st, err := s.openStream(ctx, id, req)
 	if err != nil {
 		s.log.Error("ws stream failed", "request_id", id, "err", err)
+		status = upstreamStatus(err)
+		span.RecordError(err)
 		code := websocket.StatusInternalError
 		if errors.Is(err, router.ErrQueueFull) || errors.Is(err, router.ErrNoBackend) {
 			code = websocket.StatusTryAgainLater
@@ -194,10 +216,12 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ttft *int64
+	var ttftDur time.Duration
 	var final backend.Token
 	for tok, more := st.first, true; more; tok, more = <-st.ch {
 		if tok.Err != nil {
 			streamErr = tok.Err
+			s.Metrics.StreamAborted(ctx, "ws")
 			s.log.Error("ws stream aborted", "request_id", id, "backend", be.Name(), "err", tok.Err)
 			fail(websocket.StatusInternalError, tok.Err.Error())
 			return
@@ -207,7 +231,8 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if ttft == nil {
-			ms := s.now().Sub(st.started).Milliseconds()
+			ttftDur = s.now().Sub(st.started)
+			ms := ttftDur.Milliseconds()
 			ttft = &ms
 		}
 		if err := wsjson.Write(ctx, conn, wsMessage{Type: "token", Text: tok.Text}); err != nil {
@@ -219,6 +244,9 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 	if final.Usage != nil {
 		u := toUsage(*final.Usage)
 		done.Usage = &u
+		if ttft != nil {
+			s.Metrics.Generation(ctx, be.Name(), &ttftDur, s.now().Sub(st.started), *final.Usage)
+		}
 	}
 	if err := wsjson.Write(ctx, conn, done); err != nil {
 		streamErr = context.Canceled

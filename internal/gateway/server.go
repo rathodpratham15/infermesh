@@ -7,11 +7,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
+	"github.com/rathodpratham15/infermesh/internal/metrics"
 	"github.com/rathodpratham15/infermesh/internal/router"
 )
 
@@ -31,14 +37,22 @@ type Server struct {
 	MaxRetries int
 	// RequestTimeout bounds a whole request, including time spent queued.
 	RequestTimeout time.Duration
+	// Metrics receives request-level measurements. New installs a no-op.
+	Metrics *metrics.Metrics
 }
 
+// tracer is resolved per use so it follows whichever provider is installed.
+func tracer() trace.Tracer { return otel.Tracer("github.com/rathodpratham15/infermesh/gateway") }
+
 func New(r router.Router, log *slog.Logger) *Server {
-	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute}
+	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, Metrics: metrics.Noop()}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if h := s.Metrics.Handler(); h != nil {
+		mux.Handle("GET /metrics", h)
+	}
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /v1/backends", s.backends)
@@ -63,7 +77,8 @@ func (s *Server) withRequestID(next http.Handler) http.Handler {
 			id = "req-" + hex.EncodeToString(b[:])
 		}
 		w.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, id)))
+		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, ctxKey{}, id)))
 	})
 }
 
@@ -167,7 +182,7 @@ func (s *Server) withTimeout(ctx context.Context) (context.Context, context.Canc
 // different backend while the error is retryable and the budget allows. fn must
 // release the lease itself unless it returns an error, in which case attempt
 // releases it.
-func (s *Server) attempt(ctx context.Context, id string, fn func(*router.Lease) error) error {
+func (s *Server) attempt(ctx context.Context, id string, fn func(context.Context, *router.Lease) error) error {
 	var tried []string
 	var last error
 	for n := 0; ; n++ {
@@ -178,7 +193,16 @@ func (s *Server) attempt(ctx context.Context, id string, fn func(*router.Lease) 
 			}
 			return err
 		}
-		err = fn(lease)
+		actx, span := tracer().Start(ctx, "backend.attempt", trace.WithAttributes(
+			attribute.String("infermesh.backend", lease.Backend.Name()),
+			attribute.Int("infermesh.attempt", n+1),
+			attribute.String("infermesh.request_id", id)))
+		err = fn(actx, lease)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
 		if err == nil {
 			return nil
 		}
@@ -193,6 +217,15 @@ func (s *Server) attempt(ctx context.Context, id string, fn func(*router.Lease) 
 }
 
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	start := s.now()
+	sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+	w = sw
+	s.Metrics.InFlight(r.Context(), 1, "chat")
+	defer func() {
+		s.Metrics.InFlight(r.Context(), -1, "chat")
+		s.Metrics.Request(r.Context(), "chat", sw.code, s.now().Sub(start))
+	}()
+
 	req, ok := parseChatRequest(w, r)
 	if !ok {
 		return
@@ -200,6 +233,11 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 	id := requestID(ctx)
+	ctx, span := tracer().Start(ctx, "chat.completions", trace.WithAttributes(
+		attribute.String("infermesh.request_id", id),
+		attribute.Bool("infermesh.stream", req.Stream),
+		attribute.String("infermesh.model", req.Model)))
+	defer span.End()
 
 	if req.Stream {
 		s.streamSSE(ctx, w, req, id)
@@ -208,8 +246,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	var resp backend.Response
 	var served string
-	start := s.now()
-	err := s.attempt(ctx, id, func(l *router.Lease) error {
+	genStart := s.now()
+	err := s.attempt(ctx, id, func(ctx context.Context, l *router.Lease) error {
 		var err error
 		if resp, err = l.Backend.Generate(ctx, req.toBackend(id)); err != nil {
 			return err
@@ -219,12 +257,16 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		s.log.Error("generate failed", "request_id", id, "err", err)
 		s.writeUpstreamError(w, err)
 		return
 	}
+	genDur := s.now().Sub(genStart)
+	s.Metrics.Generation(ctx, served, nil, genDur, resp.Usage)
 	s.log.Info("generate ok", "request_id", id, "backend", served,
-		"latency_ms", s.now().Sub(start).Milliseconds(), "output_tokens", resp.Usage.CompletionTokens)
+		"latency_ms", genDur.Milliseconds(), "output_tokens", resp.Usage.CompletionTokens)
 
 	w.Header().Set("X-InferMesh-Backend", served)
 	writeJSON(w, http.StatusOK, chatResponse{
@@ -257,3 +299,17 @@ func writeError(w http.ResponseWriter, code int, typ, msg string) {
 	b.Error.Message, b.Error.Type = msg, typ
 	writeJSON(w, code, b)
 }
+
+// statusWriter remembers the status code for metrics. Unwrap keeps Flush and
+// other http.ResponseController features working.
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.code = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

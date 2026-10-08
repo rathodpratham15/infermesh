@@ -15,8 +15,13 @@ import (
 	"github.com/rathodpratham15/infermesh/internal/backend"
 	"github.com/rathodpratham15/infermesh/internal/config"
 	"github.com/rathodpratham15/infermesh/internal/gateway"
+	"github.com/rathodpratham15/infermesh/internal/metrics"
 	"github.com/rathodpratham15/infermesh/internal/router"
+	"github.com/rathodpratham15/infermesh/internal/telemetry"
 )
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -45,10 +50,22 @@ func run() error {
 		members = append(members, router.Member{Backend: be, Weight: bc.Weight, MaxConcurrent: bc.MaxConcurrent})
 		log.Info("backend configured", "name", bc.Name, "kind", bc.Kind, "weight", bc.Weight, "max_concurrent", bc.MaxConcurrent)
 	}
-	pool := router.NewPool(members, router.Options{Policy: policy, MaxQueue: cfg.MaxQueue, Log: log})
+	m, err := metrics.New(version)
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
+	pool := router.NewPool(members, router.Options{Policy: policy, MaxQueue: cfg.MaxQueue, Log: log, Observer: m})
+	if err := m.RegisterPool(pool); err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownTracing, tracing, err := telemetry.SetupTracing(ctx, version)
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	log.Info("telemetry configured", "prometheus", "/metrics", "otlp_tracing", tracing)
 	pool.CheckHealth(ctx)
 	go pool.RunHealthChecks(ctx, cfg.HealthInterval)
 
@@ -56,6 +73,7 @@ func run() error {
 	gw.AllowedOrigins = cfg.AllowedOrigins
 	gw.MaxRetries = cfg.MaxRetries
 	gw.RequestTimeout = cfg.RequestTimeout
+	gw.Metrics = m
 	log.Info("routing configured", "policy", cfg.RoutingPolicy, "max_retries", cfg.MaxRetries, "max_queue", cfg.MaxQueue)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -80,6 +98,14 @@ func run() error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("shutdown: %w", err)
+	}
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer flushCancel()
+	if err := shutdownTracing(flushCtx); err != nil {
+		log.Warn("flushing traces", "err", err)
+	}
+	if err := m.Shutdown(flushCtx); err != nil {
+		log.Warn("stopping metrics", "err", err)
 	}
 	log.Info("shutdown complete")
 	return nil

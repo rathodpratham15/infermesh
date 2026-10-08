@@ -1,0 +1,9 @@
+# Local Prometheus config: scrapes the gateway's /metrics endpoint.
+# Kubernetes deployments scrape through a ServiceMonitor or pod annotations instead (see the Helm chart).
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: infermesh-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
