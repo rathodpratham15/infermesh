@@ -238,3 +238,31 @@ func TestVLLMLive(t *testing.T) {
 	}
 	t.Logf("generate=%q stream=%q usage=%+v", resp.Content, text, last.Usage)
 }
+
+func TestRetryable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{&HTTPError{Status: 400}, false},
+		{&HTTPError{Status: 404}, false},
+		{&HTTPError{Status: 429}, true},
+		{&HTTPError{Status: 503}, true},
+		{fmt.Errorf("wrapped: %w", &HTTPError{Status: 500}), true},
+		{io.ErrUnexpectedEOF, true},
+		{errors.New("decode failure"), false},
+	}
+	for _, c := range cases {
+		if got := Retryable(c.err); got != c.want {
+			t.Errorf("Retryable(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+	// A refused connection is a net.Error and must be retryable.
+	_, err := NewVLLM("v", "http://127.0.0.1:1", "m", time.Second).Generate(context.Background(), Request{})
+	if !Retryable(err) {
+		t.Errorf("connection refused should be retryable, got %v", err)
+	}
+}

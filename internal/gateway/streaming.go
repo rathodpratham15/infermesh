@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,31 +12,57 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
+	"github.com/rathodpratham15/infermesh/internal/router"
 )
+
+// openedStream is a backend stream that has produced its first token (or
+// failed trying). Retries are only possible up to this point: once a token
+// reaches the client the response is committed.
+type openedStream struct {
+	lease   *router.Lease
+	first   backend.Token
+	ch      <-chan backend.Token
+	started time.Time
+}
+
+// openStream leases a backend and waits for its first token, retrying on
+// another backend if the start fails with a retryable error. On success the
+// caller owns the lease and must Release it when the stream ends.
+func (s *Server) openStream(ctx context.Context, id string, req chatRequest) (*openedStream, error) {
+	var out *openedStream
+	err := s.attempt(ctx, id, func(l *router.Lease) error {
+		started := s.now()
+		ch, err := l.Backend.Stream(ctx, req.toBackend(id))
+		if err != nil {
+			return err
+		}
+		first, ok := <-ch
+		if !ok {
+			return errors.New("backend closed the stream without output")
+		}
+		if first.Err != nil {
+			return first.Err
+		}
+		out = &openedStream{lease: l, first: first, ch: ch, started: started}
+		return nil
+	})
+	return out, err
+}
 
 // streamSSE serves an OpenAI-style server-sent-events stream. The HTTP status
 // is committed only once the first backend token arrives, so failures before
 // that point are reported as ordinary JSON errors. Cancelling the request
-// (client disconnect) cancels the backend call through the request context.
-func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, req chatRequest, be backend.InferenceBackend, id string) {
-	start := s.now()
-	ch, err := be.Stream(r.Context(), req.toBackend(id))
+// (client disconnect) cancels the backend call through the context.
+func (s *Server) streamSSE(ctx context.Context, w http.ResponseWriter, req chatRequest, id string) {
+	st, err := s.openStream(ctx, id, req)
 	if err != nil {
-		s.log.Error("stream failed", "request_id", id, "backend", be.Name(), "err", err)
-		writeError(w, upstreamStatus(err), "backend_error", err.Error())
+		s.log.Error("stream failed", "request_id", id, "err", err)
+		s.writeUpstreamError(w, err)
 		return
 	}
-
-	first, ok := <-ch
-	if !ok {
-		writeError(w, http.StatusBadGateway, "backend_error", "backend closed the stream without output")
-		return
-	}
-	if first.Err != nil {
-		s.log.Error("stream failed", "request_id", id, "backend", be.Name(), "err", first.Err)
-		writeError(w, upstreamStatus(first.Err), "backend_error", first.Err.Error())
-		return
-	}
+	be := st.lease.Backend
+	var streamErr error
+	defer func() { st.lease.Release(streamErr) }()
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -58,16 +85,19 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, req chatReque
 		}
 		return rc.Flush() == nil
 	}
+	clientGone := func() { streamErr = context.Canceled }
 
 	if !writeChunk(chatChunk{Choices: []chunkChoice{{Delta: chunkDelta{Role: "assistant"}}}}) {
+		clientGone()
 		return
 	}
 
 	var ttft time.Duration
 	var tokens int
 	var final backend.Token
-	for tok, more := first, true; more; tok, more = <-ch {
+	for tok, more := st.first, true; more; tok, more = <-st.ch {
 		if tok.Err != nil {
+			streamErr = tok.Err
 			s.log.Error("stream aborted", "request_id", id, "backend", be.Name(), "err", tok.Err)
 			// Headers are already sent; report in-band like OpenAI does.
 			_, _ = fmt.Fprintf(w, "data: {\"error\":{\"message\":%q,\"type\":\"backend_error\"}}\n\n", tok.Err.Error())
@@ -79,11 +109,12 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, req chatReque
 			continue
 		}
 		if tokens == 0 {
-			ttft = s.now().Sub(start)
+			ttft = s.now().Sub(st.started)
 		}
 		tokens++
 		if !writeChunk(chatChunk{Choices: []chunkChoice{{Delta: chunkDelta{Content: tok.Text}}}}) {
-			return // client went away; the request context cancels the backend
+			clientGone() // the context cancels the backend call
+			return
 		}
 	}
 
@@ -92,18 +123,20 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, req chatReque
 		finish = "stop"
 	}
 	if !writeChunk(chatChunk{Choices: []chunkChoice{{FinishReason: &finish}}}) {
+		clientGone()
 		return
 	}
 	if final.Usage != nil {
 		u := toUsage(*final.Usage)
 		if !writeChunk(chatChunk{Choices: []chunkChoice{}, Usage: &u}) {
+			clientGone()
 			return
 		}
 	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	_ = rc.Flush()
 	s.log.Info("stream ok", "request_id", id, "backend", be.Name(),
-		"ttft_ms", ttft.Milliseconds(), "total_ms", s.now().Sub(start).Milliseconds(), "chunks", tokens)
+		"ttft_ms", ttft.Milliseconds(), "total_ms", s.now().Sub(st.started).Milliseconds(), "chunks", tokens)
 }
 
 // chatWebSocket streams one completion over a WebSocket. The client sends a
@@ -139,28 +172,32 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// CloseRead keeps draining control frames and cancels ctx when the peer
 	// disconnects, which in turn cancels the backend call.
-	ctx := conn.CloseRead(r.Context())
+	ctx, cancel := s.withTimeout(conn.CloseRead(r.Context()))
+	defer cancel()
 
-	be, err := s.router.Pick(ctx)
+	st, err := s.openStream(ctx, id, req)
 	if err != nil {
-		fail(websocket.StatusTryAgainLater, err.Error())
+		s.log.Error("ws stream failed", "request_id", id, "err", err)
+		code := websocket.StatusInternalError
+		if errors.Is(err, router.ErrQueueFull) || errors.Is(err, router.ErrNoBackend) {
+			code = websocket.StatusTryAgainLater
+		}
+		fail(code, err.Error())
 		return
 	}
-	start := s.now()
-	ch, err := be.Stream(ctx, req.toBackend(id))
-	if err != nil {
-		s.log.Error("ws stream failed", "request_id", id, "backend", be.Name(), "err", err)
-		fail(websocket.StatusInternalError, err.Error())
-		return
-	}
+	be := st.lease.Backend
+	var streamErr error
+	defer func() { st.lease.Release(streamErr) }()
 
 	if err := wsjson.Write(ctx, conn, wsMessage{Type: "start", RequestID: id, Backend: be.Name()}); err != nil {
+		streamErr = context.Canceled
 		return
 	}
 	var ttft *int64
 	var final backend.Token
-	for tok := range ch {
+	for tok, more := st.first, true; more; tok, more = <-st.ch {
 		if tok.Err != nil {
+			streamErr = tok.Err
 			s.log.Error("ws stream aborted", "request_id", id, "backend", be.Name(), "err", tok.Err)
 			fail(websocket.StatusInternalError, tok.Err.Error())
 			return
@@ -170,10 +207,11 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if ttft == nil {
-			ms := s.now().Sub(start).Milliseconds()
+			ms := s.now().Sub(st.started).Milliseconds()
 			ttft = &ms
 		}
 		if err := wsjson.Write(ctx, conn, wsMessage{Type: "token", Text: tok.Text}); err != nil {
+			streamErr = context.Canceled
 			return
 		}
 	}
@@ -183,6 +221,7 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		done.Usage = &u
 	}
 	if err := wsjson.Write(ctx, conn, done); err != nil {
+		streamErr = context.Canceled
 		return
 	}
 	_ = conn.Close(websocket.StatusNormalClosure, "")
