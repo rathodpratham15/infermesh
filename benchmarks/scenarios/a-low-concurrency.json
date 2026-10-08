@@ -1,0 +1,12 @@
+{
+  "name": "a-low-concurrency",
+  "description": "Baseline: one request at a time, short prompts. Isolates single-request latency without queueing.",
+  "concurrency": [
+    1
+  ],
+  "duration": "60s",
+  "warmup": "10s",
+  "dataset": "benchmarks/datasets/short.jsonl",
+  "stream": false,
+  "max_tokens": 128
+}

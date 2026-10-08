@@ -1,0 +1,15 @@
+{
+  "name": "e-streaming",
+  "description": "Streaming responses: time to first token and decode behaviour under rising concurrency.",
+  "concurrency": [
+    1,
+    5,
+    10,
+    25
+  ],
+  "duration": "60s",
+  "warmup": "10s",
+  "dataset": "benchmarks/datasets/short.jsonl",
+  "stream": true,
+  "max_tokens": 128
+}
