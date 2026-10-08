@@ -43,6 +43,24 @@ The default local model (`Qwen2.5-0.5B-Instruct-4bit`) was chosen to fit
 comfortably in 16 GB. Do not assume an 8B model fits on a laptop; override
 `LOCAL_MODEL` to try others.
 
+## Streaming
+
+```bash
+# Server-sent events (OpenAI-compatible chunks, ends with `data: [DONE]`)
+curl -N localhost:8080/v1/chat/completions \
+  -d '{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+WebSocket: connect to `ws://localhost:8080/v1/chat/stream`, send one JSON chat
+request, and read frames `start` (request ID, backend), `token` (text),
+`done` (finish reason, usage, `ttft_ms`) or `error`, after which the server
+closes. Browsers on another origin (e.g. the Vite dev server) must be listed in
+`WS_ALLOWED_ORIGINS`, e.g. `WS_ALLOWED_ORIGINS=localhost:5173`.
+
+Errors that happen before the first token are normal JSON errors (502/504). After
+the first token the HTTP status is already sent, so SSE reports a failure as a
+final `data: {"error": ...}` event. Closing the connection cancels the backend call.
+
 ## Configuration
 
 | Variable | Meaning | Default |
@@ -53,6 +71,7 @@ comfortably in 16 GB. Do not assume an 8B model fits on a laptop; override
 | `BACKEND_<NAME>_MODEL` | model sent upstream; overrides the request's | request's |
 | `BACKEND_<NAME>_TIMEOUT` | per-request timeout (covers a whole stream) | `60s` |
 | `BACKEND_<NAME>_WEIGHT` / `_MAX_CONCURRENT` | used by routing (Phase 5) | `1` / `64` |
+| `WS_ALLOWED_ORIGINS` | browser origins allowed on the WebSocket | none (same-origin only) |
 | `LISTEN_ADDR`, `SHUTDOWN_TIMEOUT`, `LOG_LEVEL` | gateway process | `:8080`, `15s`, `info` |
 
 ## Tests

@@ -21,6 +21,11 @@ type Server struct {
 	router router.Router
 	log    *slog.Logger
 	now    func() time.Time
+
+	// AllowedOrigins lists origin patterns (e.g. "localhost:5173") permitted to
+	// open a WebSocket from a browser. Same-origin and non-browser clients
+	// are always allowed.
+	AllowedOrigins []string
 }
 
 func New(r router.Router, log *slog.Logger) *Server {
@@ -32,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
+	mux.HandleFunc("GET /v1/chat/stream", s.chatWebSocket)
 	return s.withRequestID(mux)
 }
 
@@ -82,44 +88,65 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, map[string]any{"ready": ready, "backends": status})
 }
 
-func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+// parseChatRequest decodes and validates a chat request body.
+func parseChatRequest(w http.ResponseWriter, r *http.Request) (chatRequest, bool) {
 	var req chatRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON body: "+err.Error())
-		return
+		return req, false
 	}
-	if len(req.Messages) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "messages must not be empty")
-		return
+	if err := req.validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return req, false
 	}
-	if req.Stream {
-		// Implemented in Phase 4.
-		writeError(w, http.StatusNotImplemented, "not_implemented", "streaming is not implemented yet")
-		return
-	}
+	return req, true
+}
 
+func (c chatRequest) validate() error {
+	if len(c.Messages) == 0 {
+		return errors.New("messages must not be empty")
+	}
+	return nil
+}
+
+func (c chatRequest) toBackend(id string) backend.Request {
+	br := backend.Request{ID: id, Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature}
+	for _, m := range c.Messages {
+		br.Messages = append(br.Messages, backend.Message{Role: m.Role, Content: m.Content})
+	}
+	return br
+}
+
+// upstreamStatus maps a backend error to the HTTP status returned to the client.
+func upstreamStatus(err error) int {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusBadGateway
+}
+
+func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	req, ok := parseChatRequest(w, r)
+	if !ok {
+		return
+	}
 	id := requestID(r.Context())
 	be, err := s.router.Pick(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
-
-	breq := backend.Request{ID: id, Model: req.Model, MaxTokens: req.MaxTokens, Temperature: req.Temperature}
-	for _, m := range req.Messages {
-		breq.Messages = append(breq.Messages, backend.Message{Role: m.Role, Content: m.Content})
+	if req.Stream {
+		s.streamSSE(w, r, req, be, id)
+		return
 	}
 
 	start := s.now()
-	resp, err := be.Generate(r.Context(), breq)
+	resp, err := be.Generate(r.Context(), req.toBackend(id))
 	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, context.DeadlineExceeded) {
-			status = http.StatusGatewayTimeout
-		}
 		s.log.Error("generate failed", "request_id", id, "backend", be.Name(), "err", err)
-		writeError(w, status, "backend_error", err.Error())
+		writeError(w, upstreamStatus(err), "backend_error", err.Error())
 		return
 	}
 	s.log.Info("generate ok", "request_id", id, "backend", be.Name(),
@@ -132,12 +159,12 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Created: s.now().Unix(),
 		Model:   req.Model,
 		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: resp.Content}, FinishReason: resp.FinishReason}},
-		Usage: usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.PromptTokens + resp.Usage.CompletionTokens,
-		},
+		Usage:   toUsage(resp.Usage),
 	})
+}
+
+func toUsage(u backend.Usage) usage {
+	return usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.PromptTokens + u.CompletionTokens}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
