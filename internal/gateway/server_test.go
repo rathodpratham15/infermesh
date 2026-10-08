@@ -13,9 +13,9 @@ import (
 	"github.com/rathodpratham15/infermesh/internal/router"
 )
 
-func newTestServer(t *testing.T) (*httptest.Server, *fakeBackend) {
+func newTestServer(t *testing.T) (*httptest.Server, *backend.Mock) {
 	t.Helper()
-	m := newFake("mock")
+	m := backend.NewMock("mock", 0)
 	s := New(router.NewFirst([]backend.InferenceBackend{m}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
