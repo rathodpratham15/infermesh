@@ -42,9 +42,11 @@ func run() error {
 		log.Info("backend configured", "name", bc.Name, "kind", bc.Kind)
 	}
 
+	gw := gateway.New(router.NewFirst(backends), log)
+	gw.AllowedOrigins = cfg.AllowedOrigins
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           gateway.New(router.NewFirst(backends), log).Handler(),
+		Handler:           gw.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

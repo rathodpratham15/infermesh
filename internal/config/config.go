@@ -23,6 +23,7 @@ type Config struct {
 	ListenAddr      string
 	ShutdownTimeout time.Duration
 	LogLevel        string
+	AllowedOrigins  []string // WebSocket origin patterns, e.g. localhost:5173
 	Backends        []Backend
 }
 
@@ -34,6 +35,7 @@ func Load() (Config, error) { return LoadFrom(os.Getenv) }
 //	LISTEN_ADDR           default :8080
 //	SHUTDOWN_TIMEOUT      default 15s
 //	LOG_LEVEL             debug|info|warn|error, default info
+//	WS_ALLOWED_ORIGINS    comma list of browser origins allowed on the WebSocket
 //	BACKENDS              comma list of names, default "mock"
 //	BACKEND_<NAME>_KIND   mock|vllm|triton (default: the name itself)
 //	BACKEND_<NAME>_URL / _MODEL / _TIMEOUT / _WEIGHT / _MAX_CONCURRENT
@@ -42,6 +44,11 @@ func LoadFrom(get func(string) string) (Config, error) {
 		ListenAddr:      or(get("LISTEN_ADDR"), ":8080"),
 		LogLevel:        or(get("LOG_LEVEL"), "info"),
 		ShutdownTimeout: 15 * time.Second,
+	}
+	for _, o := range strings.Split(get("WS_ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			c.AllowedOrigins = append(c.AllowedOrigins, o)
+		}
 	}
 	var err error
 	if v := get("SHUTDOWN_TIMEOUT"); v != "" {

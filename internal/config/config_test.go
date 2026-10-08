@@ -17,6 +17,16 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestAllowedOrigins(t *testing.T) {
+	c, err := LoadFrom(env(map[string]string{"WS_ALLOWED_ORIGINS": "localhost:5173, example.com ,"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AllowedOrigins) != 2 || c.AllowedOrigins[0] != "localhost:5173" || c.AllowedOrigins[1] != "example.com" {
+		t.Fatalf("origins = %v", c.AllowedOrigins)
+	}
+}
+
 func TestMultipleBackends(t *testing.T) {
 	c, err := LoadFrom(env(map[string]string{
 		"BACKENDS":                    "vllm, triton",

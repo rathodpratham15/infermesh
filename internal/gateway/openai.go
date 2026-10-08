@@ -42,3 +42,35 @@ type errorBody struct {
 		Type    string `json:"type"`
 	} `json:"error"`
 }
+
+type chunkDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type chunkChoice struct {
+	Index        int        `json:"index"`
+	Delta        chunkDelta `json:"delta"`
+	FinishReason *string    `json:"finish_reason"`
+}
+
+type chatChunk struct {
+	ID      string        `json:"id"`
+	Object  string        `json:"object"`
+	Created int64         `json:"created"`
+	Model   string        `json:"model"`
+	Choices []chunkChoice `json:"choices"`
+	Usage   *usage        `json:"usage,omitempty"`
+}
+
+// wsMessage is the server-to-client frame on the WebSocket endpoint.
+type wsMessage struct {
+	Type         string `json:"type"` // start | token | done | error
+	RequestID    string `json:"request_id,omitempty"`
+	Backend      string `json:"backend,omitempty"`
+	Text         string `json:"text,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"`
+	Usage        *usage `json:"usage,omitempty"`
+	TTFTMs       *int64 `json:"ttft_ms,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
