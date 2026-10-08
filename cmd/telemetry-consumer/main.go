@@ -15,6 +15,7 @@ import (
 
 	"github.com/rathodpratham15/infermesh/internal/config"
 	"github.com/rathodpratham15/infermesh/internal/consumer"
+	"github.com/rathodpratham15/infermesh/internal/health"
 	"github.com/rathodpratham15/infermesh/internal/metrics"
 )
 
@@ -22,6 +23,14 @@ import (
 var version = "dev"
 
 func main() {
+	// "telemetry-consumer healthcheck" is used by the container HEALTHCHECK.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := health.Probe(env("METRICS_ADDR", ":9100"), "9100"); err != nil {
+			fmt.Fprintln(os.Stderr, "unhealthy:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("telemetry-consumer exited", "err", err)
 		os.Exit(1)

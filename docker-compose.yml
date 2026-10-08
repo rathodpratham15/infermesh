@@ -1,0 +1,179 @@
+# InferMesh local stack. Runs on any machine with Docker, with no NVIDIA GPU.
+#
+#   make up                 gateway (mock backend) + Kafka + consumer + Prometheus + Grafana
+#   make up-host-model      same, gateway routed to a real model served on the host (Apple Silicon)
+#   make up-cpu-model       same, plus a llama.cpp server container as the engine (CPU)
+#   make up-gpu             same, plus vLLM in a container on an NVIDIA GPU machine
+#
+# The architecture is the same in every mode: client -> gateway -> an OpenAI-compatible
+# engine, with telemetry flowing gateway -> Kafka -> consumer and metrics to Prometheus/Grafana.
+# Only the engine behind the gateway changes. Published ports bind to 127.0.0.1.
+
+name: infermesh
+
+x-go-build: &go-build
+  context: .
+  dockerfile: deploy/docker/Dockerfile
+  args:
+    VERSION: ${INFERMESH_VERSION:-dev}
+
+services:
+  gateway:
+    build:
+      <<: *go-build
+      args:
+        VERSION: ${INFERMESH_VERSION:-dev}
+        CMD: gateway
+    image: infermesh-gateway:${INFERMESH_VERSION:-dev}
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      BACKENDS: ${BACKENDS:-mock}
+      BACKEND_VLLM_URL: ${BACKEND_VLLM_URL:-http://host.docker.internal:8000}
+      BACKEND_VLLM_MODEL: ${BACKEND_VLLM_MODEL:-}
+      BACKEND_VLLM_MAX_CONCURRENT: ${BACKEND_VLLM_MAX_CONCURRENT:-16}
+      ROUTING_POLICY: ${ROUTING_POLICY:-least_outstanding}
+      KAFKA_BROKERS: kafka:9092
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  telemetry-consumer:
+    build:
+      <<: *go-build
+      args:
+        VERSION: ${INFERMESH_VERSION:-dev}
+        CMD: telemetry-consumer
+    image: infermesh-telemetry-consumer:${INFERMESH_VERSION:-dev}
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      METRICS_ADDR: ":9100"
+    ports:
+      - "127.0.0.1:9100:9100"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Single-node KRaft broker. Containers use kafka:9092; tools on the host use localhost:29092.
+  kafka:
+    image: apache/kafka:3.9.0
+    ports:
+      - "127.0.0.1:29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_RETENTION_HOURS: 24
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # --- optional engines (the gateway reaches them as BACKEND_VLLM_URL) ---
+
+  # CPU-only OpenAI-compatible engine, so the stack can serve a real model without a GPU or
+  # anything installed on the host. This is llama.cpp, not vLLM; it is a development stand-in
+  # for the engine, like mlx-lm in docs/local-development.md.
+  llamacpp:
+    profiles: ["cpu-model"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -hf ${LLAMACPP_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M}
+      --host 0.0.0.0 --port 8000 -c 4096
+    volumes:
+      - llamacpp-cache:/root/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  # vLLM on an NVIDIA GPU. REQUIRES an NVIDIA GPU and the NVIDIA Container Toolkit; it cannot
+  # run on a Mac. Not exercised on the machine this repo was developed on.
+  vllm:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:${VLLM_VERSION:-v0.31.0}
+    command: ["--model", "${VLLM_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}", "--host", "0.0.0.0", "--port", "8000"]
+    ipc: host
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${VLLM_GPUS:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
+  llamacpp-cache:
+  hf-cache:
