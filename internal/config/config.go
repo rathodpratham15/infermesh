@@ -1,0 +1,122 @@
+// Package config loads gateway settings from environment variables.
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Backend struct {
+	Name          string
+	Kind          string // mock | vllm | triton
+	URL           string
+	Model         string
+	Timeout       time.Duration
+	Weight        int
+	MaxConcurrent int
+}
+
+type Config struct {
+	ListenAddr      string
+	ShutdownTimeout time.Duration
+	LogLevel        string
+	Backends        []Backend
+}
+
+// Load reads configuration using os.Getenv.
+func Load() (Config, error) { return LoadFrom(os.Getenv) }
+
+// LoadFrom is Load with an injectable lookup, for tests.
+//
+//	LISTEN_ADDR           default :8080
+//	SHUTDOWN_TIMEOUT      default 15s
+//	LOG_LEVEL             debug|info|warn|error, default info
+//	BACKENDS              comma list of names, default "mock"
+//	BACKEND_<NAME>_KIND   mock|vllm|triton (default: the name itself)
+//	BACKEND_<NAME>_URL / _MODEL / _TIMEOUT / _WEIGHT / _MAX_CONCURRENT
+func LoadFrom(get func(string) string) (Config, error) {
+	c := Config{
+		ListenAddr:      or(get("LISTEN_ADDR"), ":8080"),
+		LogLevel:        or(get("LOG_LEVEL"), "info"),
+		ShutdownTimeout: 15 * time.Second,
+	}
+	var err error
+	if v := get("SHUTDOWN_TIMEOUT"); v != "" {
+		if c.ShutdownTimeout, err = time.ParseDuration(v); err != nil {
+			return c, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, name := range strings.Split(or(get("BACKENDS"), "mock"), ",") {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		if seen[name] {
+			return c, fmt.Errorf("BACKENDS: duplicate backend %q", name)
+		}
+		seen[name] = true
+
+		p := "BACKEND_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(name)) + "_"
+		b := Backend{
+			Name:          name,
+			Kind:          strings.ToLower(or(get(p+"KIND"), name)),
+			URL:           get(p + "URL"),
+			Model:         get(p + "MODEL"),
+			Timeout:       60 * time.Second,
+			Weight:        1,
+			MaxConcurrent: 64,
+		}
+		if v := get(p + "TIMEOUT"); v != "" {
+			if b.Timeout, err = time.ParseDuration(v); err != nil {
+				return c, fmt.Errorf("%sTIMEOUT: %w", p, err)
+			}
+		}
+		if b.Weight, err = intEnv(get, p+"WEIGHT", b.Weight); err != nil {
+			return c, err
+		}
+		if b.MaxConcurrent, err = intEnv(get, p+"MAX_CONCURRENT", b.MaxConcurrent); err != nil {
+			return c, err
+		}
+		if b.Weight < 1 || b.MaxConcurrent < 1 || b.Timeout <= 0 {
+			return c, fmt.Errorf("backend %q: weight, max concurrent and timeout must be positive", name)
+		}
+		switch b.Kind {
+		case "mock":
+		case "vllm", "triton":
+			if b.URL == "" {
+				return c, fmt.Errorf("backend %q (%s): %sURL is required", name, b.Kind, p)
+			}
+		default:
+			return c, fmt.Errorf("backend %q: unknown kind %q", name, b.Kind)
+		}
+		c.Backends = append(c.Backends, b)
+	}
+	if len(c.Backends) == 0 {
+		return c, fmt.Errorf("BACKENDS: at least one backend is required")
+	}
+	return c, nil
+}
+
+func or(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func intEnv(get func(string) string, key string, def int) (int, error) {
+	v := get(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return n, nil
+}
