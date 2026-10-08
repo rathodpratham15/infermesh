@@ -25,6 +25,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
+	"github.com/rathodpratham15/infermesh/internal/events"
 	"github.com/rathodpratham15/infermesh/internal/router"
 )
 
@@ -49,12 +50,21 @@ type Metrics struct {
 	tokensPerSec  metric.Float64Histogram
 	backendFails  metric.Int64Counter
 	routing       metric.Int64Counter
+	eventsOut     metric.Int64Counter
 	shutdownFuncs []func(context.Context) error
 }
 
-// New builds a Metrics backed by a real OTel SDK and a private Prometheus
-// registry (with Go runtime and process collectors).
-func New(version string) (*Metrics, error) {
+// Provider is an OTel meter backed by a private Prometheus registry.
+type Provider struct {
+	Meter    metric.Meter
+	Handler  http.Handler
+	Shutdown func(context.Context) error
+}
+
+// NewProvider builds a meter provider for the named service whose metrics are
+// served in Prometheus format by Handler (Go runtime and process collectors
+// included). Histograms use latencyBuckets unless an instrument overrides them.
+func NewProvider(service, version string) (*Provider, error) {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
@@ -63,7 +73,7 @@ func New(version string) (*Metrics, error) {
 		return nil, err
 	}
 	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(
-		semconv.ServiceName("infermesh-gateway"), semconv.ServiceVersion(version)))
+		semconv.ServiceName(service), semconv.ServiceVersion(version)))
 	if err != nil {
 		return nil, err
 	}
@@ -75,12 +85,25 @@ func New(version string) (*Metrics, error) {
 			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: latencyBuckets}},
 		)),
 	)
-	m, err := newMetrics(provider.Meter(meterName))
+	return &Provider{
+		Meter:    provider.Meter(meterName),
+		Handler:  promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+		Shutdown: provider.Shutdown,
+	}, nil
+}
+
+// New builds the gateway's Metrics backed by a real OTel SDK.
+func New(version string) (*Metrics, error) {
+	p, err := NewProvider("infermesh-gateway", version)
 	if err != nil {
 		return nil, err
 	}
-	m.handler = promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
-	m.shutdownFuncs = append(m.shutdownFuncs, provider.Shutdown)
+	m, err := newMetrics(p.Meter)
+	if err != nil {
+		return nil, err
+	}
+	m.handler = p.Handler
+	m.shutdownFuncs = append(m.shutdownFuncs, p.Shutdown)
 	return m, nil
 }
 
@@ -126,6 +149,9 @@ func newMetrics(meter metric.Meter) (*Metrics, error) {
 	chk(err)
 	m.routing, err = meter.Int64Counter("infermesh.routing.decisions", metric.WithUnit("{request}"),
 		metric.WithDescription("Routing decisions by chosen backend and policy."))
+	chk(err)
+	m.eventsOut, err = meter.Int64Counter("infermesh.events.published", metric.WithUnit("{event}"),
+		metric.WithDescription("Telemetry events handed to Kafka, by delivery result (ok, error, dropped)."))
 	chk(err)
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -264,4 +290,18 @@ func Noop() *Metrics {
 	}
 	m.handler = http.NotFoundHandler()
 	return m
+}
+
+// EventPublished implements events.Reporter. A full producer buffer is reported
+// as "dropped"; any other failure as "error".
+func (m *Metrics) EventPublished(eventType string, err error) {
+	result := "ok"
+	switch {
+	case errors.Is(err, events.ErrDropped):
+		result = "dropped"
+	case err != nil:
+		result = "error"
+	}
+	m.eventsOut.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("event_type", eventType), attribute.String("result", result)))
 }

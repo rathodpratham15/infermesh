@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
+	"github.com/rathodpratham15/infermesh/internal/events"
 	"github.com/rathodpratham15/infermesh/internal/metrics"
 	"github.com/rathodpratham15/infermesh/internal/router"
 )
@@ -39,13 +40,16 @@ type Server struct {
 	RequestTimeout time.Duration
 	// Metrics receives request-level measurements. New installs a no-op.
 	Metrics *metrics.Metrics
+	// Events receives asynchronous telemetry events (Kafka). It is never on the
+	// request's critical path. New installs a no-op.
+	Events events.Publisher
 }
 
 // tracer is resolved per use so it follows whichever provider is installed.
 func tracer() trace.Tracer { return otel.Tracer("github.com/rathodpratham15/infermesh/gateway") }
 
 func New(r router.Router, log *slog.Logger) *Server {
-	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, Metrics: metrics.Noop()}
+	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, Metrics: metrics.Noop(), Events: events.Noop{}}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -178,25 +182,82 @@ func (s *Server) withTimeout(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(ctx, s.RequestTimeout)
 }
 
+// call carries per-request facts shared by the handlers and telemetry events.
+type call struct {
+	id       string
+	model    string
+	stream   bool
+	queue    time.Duration // total time spent waiting for a backend slot
+	attempts int
+	backend  string // backend of the most recent attempt
+}
+
+func (s *Server) event(c *call, typ string) events.Event {
+	return events.Event{
+		Type: typ, RequestID: c.id, Timestamp: s.now().UTC(), Backend: c.backend, Model: c.model,
+		Stream: c.stream, Attempt: c.attempts, QueueMS: c.queue.Milliseconds(),
+	}
+}
+
+func (s *Server) emitStarted(c *call) {
+	s.Events.Publish(s.event(c, events.TypeStarted))
+}
+
+// emitCompleted reports a successful generation. ttft is nil for non-streaming
+// requests; gen is the generation time (after the first token when streaming).
+func (s *Server) emitCompleted(c *call, ttft *time.Duration, gen time.Duration, u backend.Usage) {
+	e := s.event(c, events.TypeCompleted)
+	e.Status = events.StatusSuccess
+	e.InputTokens, e.OutputTokens, e.GenerationMS = u.PromptTokens, u.CompletionTokens, gen.Milliseconds()
+	if ttft != nil {
+		ms := ttft.Milliseconds()
+		e.TTFTMS = &ms
+	}
+	s.Events.Publish(e)
+}
+
+func (s *Server) emitFailed(c *call, err error) {
+	e := s.event(c, events.TypeFailed)
+	e.Status, e.Error = failureStatus(err), err.Error()
+	s.Events.Publish(e)
+}
+
+func failureStatus(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return events.StatusCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return events.StatusTimeout
+	case errors.Is(err, router.ErrQueueFull), errors.Is(err, router.ErrNoBackend):
+		return events.StatusRejected
+	}
+	return events.StatusError
+}
+
 // attempt runs fn against a backend leased from the router, retrying on a
 // different backend while the error is retryable and the budget allows. fn must
 // release the lease itself unless it returns an error, in which case attempt
 // releases it.
-func (s *Server) attempt(ctx context.Context, id string, fn func(context.Context, *router.Lease) error) error {
+func (s *Server) attempt(ctx context.Context, c *call, fn func(context.Context, *router.Lease) error) error {
 	var tried []string
 	var last error
 	for n := 0; ; n++ {
+		waitStart := s.now()
 		lease, err := s.router.Acquire(ctx, tried...)
+		c.queue += s.now().Sub(waitStart)
 		if err != nil {
 			if last != nil && errors.Is(err, router.ErrNoBackend) {
 				return last // nothing left to retry on: report the real failure
 			}
 			return err
 		}
+		c.attempts++
+		c.backend = lease.Backend.Name()
+		s.emitStarted(c)
 		actx, span := tracer().Start(ctx, "backend.attempt", trace.WithAttributes(
 			attribute.String("infermesh.backend", lease.Backend.Name()),
 			attribute.Int("infermesh.attempt", n+1),
-			attribute.String("infermesh.request_id", id)))
+			attribute.String("infermesh.request_id", c.id)))
 		err = fn(actx, lease)
 		if err != nil {
 			span.RecordError(err)
@@ -212,7 +273,7 @@ func (s *Server) attempt(ctx context.Context, id string, fn func(context.Context
 		if n >= s.MaxRetries || !backend.Retryable(err) {
 			return err
 		}
-		s.log.Warn("retrying on another backend", "request_id", id, "failed_backend", lease.Backend.Name(), "attempt", n+1, "err", err)
+		s.log.Warn("retrying on another backend", "request_id", c.id, "failed_backend", lease.Backend.Name(), "attempt", n+1, "err", err)
 	}
 }
 
@@ -239,15 +300,16 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		attribute.String("infermesh.model", req.Model)))
 	defer span.End()
 
+	c := &call{id: id, model: req.Model, stream: req.Stream}
 	if req.Stream {
-		s.streamSSE(ctx, w, req, id)
+		s.streamSSE(ctx, w, req, c)
 		return
 	}
 
 	var resp backend.Response
 	var served string
 	genStart := s.now()
-	err := s.attempt(ctx, id, func(ctx context.Context, l *router.Lease) error {
+	err := s.attempt(ctx, c, func(ctx context.Context, l *router.Lease) error {
 		var err error
 		if resp, err = l.Backend.Generate(ctx, req.toBackend(id)); err != nil {
 			return err
@@ -259,12 +321,14 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		s.emitFailed(c, err)
 		s.log.Error("generate failed", "request_id", id, "err", err)
 		s.writeUpstreamError(w, err)
 		return
 	}
 	genDur := s.now().Sub(genStart)
 	s.Metrics.Generation(ctx, served, nil, genDur, resp.Usage)
+	s.emitCompleted(c, nil, genDur, resp.Usage)
 	s.log.Info("generate ok", "request_id", id, "backend", served,
 		"latency_ms", genDur.Milliseconds(), "output_tokens", resp.Usage.CompletionTokens)
 
