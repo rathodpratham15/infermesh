@@ -1,0 +1,15 @@
+{
+  "name": "f-backend-comparison",
+  "description": "Run once per engine against comparable hardware and the same model, then `inferbench compare`. Pass --engine, --hardware and --model each time; compare refuses mismatched or unlabeled reports.",
+  "concurrency": [
+    1,
+    5,
+    10,
+    25
+  ],
+  "duration": "60s",
+  "warmup": "10s",
+  "dataset": "benchmarks/datasets/short.jsonl",
+  "stream": true,
+  "max_tokens": 128
+}

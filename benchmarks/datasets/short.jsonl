@@ -1,0 +1,40 @@
+{"prompt": "What is the capital of France?"}
+{"prompt": "Explain what a mutex is in one sentence."}
+{"prompt": "Give me three tips for writing clear commit messages."}
+{"prompt": "What does TCP stand for and what does it do?"}
+{"prompt": "Name two differences between a process and a thread."}
+{"prompt": "What is a hash map?"}
+{"prompt": "Define latency versus throughput in one sentence."}
+{"prompt": "Why is the sky blue?"}
+{"prompt": "What is the difference between HTTP/1.1 and HTTP/2?"}
+{"prompt": "Explain recursion to a beginner in two sentences."}
+{"prompt": "What is a race condition?"}
+{"prompt": "List three uses of a message queue."}
+{"prompt": "What is the CAP theorem?"}
+{"prompt": "Briefly explain what Kubernetes does."}
+{"prompt": "What is a container image?"}
+{"prompt": "Explain what DNS does."}
+{"prompt": "What is the time complexity of binary search?"}
+{"prompt": "Describe a load balancer in one sentence."}
+{"prompt": "What is idempotency in an API?"}
+{"prompt": "Why do databases use indexes?"}
+{"prompt": "What does garbage collection do?"}
+{"prompt": "Explain what a deadlock is."}
+{"prompt": "What is the difference between RAM and disk?"}
+{"prompt": "Give an example of a good variable name and a bad one."}
+{"prompt": "What is a REST API?"}
+{"prompt": "Explain what caching is."}
+{"prompt": "What does a CPU cache do?"}
+{"prompt": "What is the purpose of a reverse proxy?"}
+{"prompt": "Summarize what a GPU is good at."}
+{"prompt": "What is a token in the context of language models?"}
+{"prompt": "Explain what batching means for inference servers."}
+{"prompt": "What is time to first token?"}
+{"prompt": "Name one benefit of streaming responses."}
+{"prompt": "What is a rate limiter?"}
+{"prompt": "What is backpressure?"}
+{"prompt": "Explain what a health check is."}
+{"prompt": "What is a p99 latency?"}
+{"prompt": "What is a circuit breaker?"}
+{"prompt": "Explain what a timeout is for."}
+{"prompt": "Describe what an SLO is."}

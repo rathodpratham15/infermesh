@@ -1,0 +1,14 @@
+{
+  "name": "d-short-prompts",
+  "description": "Short prompts, same concurrency levels as C, so the only change is prompt length.",
+  "concurrency": [
+    1,
+    4,
+    8
+  ],
+  "duration": "60s",
+  "warmup": "10s",
+  "dataset": "benchmarks/datasets/short.jsonl",
+  "stream": true,
+  "max_tokens": 128
+}

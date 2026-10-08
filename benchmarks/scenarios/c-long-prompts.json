@@ -1,0 +1,14 @@
+{
+  "name": "c-long-prompts",
+  "description": "Long prompts (about 3,300 characters each, several hundred tokens; the server-reported usage records the real count) stress prefill. Compare TTFT and latency with experiment D.",
+  "concurrency": [
+    1,
+    4,
+    8
+  ],
+  "duration": "60s",
+  "warmup": "10s",
+  "dataset": "benchmarks/datasets/long.jsonl",
+  "stream": true,
+  "max_tokens": 128
+}
