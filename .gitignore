@@ -4,3 +4,4 @@
 node_modules/
 benchmarks/results/
 .DS_Store
+.venv-local/
