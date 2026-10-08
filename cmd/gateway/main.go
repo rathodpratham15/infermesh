@@ -16,6 +16,7 @@ import (
 	"github.com/rathodpratham15/infermesh/internal/config"
 	"github.com/rathodpratham15/infermesh/internal/events"
 	"github.com/rathodpratham15/infermesh/internal/gateway"
+	"github.com/rathodpratham15/infermesh/internal/health"
 	"github.com/rathodpratham15/infermesh/internal/metrics"
 	"github.com/rathodpratham15/infermesh/internal/router"
 	"github.com/rathodpratham15/infermesh/internal/telemetry"
@@ -25,6 +26,15 @@ import (
 var version = "dev"
 
 func main() {
+	// "gateway healthcheck" probes the local /healthz and exits 0/1. Container
+	// images are distroless (no shell or curl), so Docker HEALTHCHECK uses this.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := health.Probe(os.Getenv("LISTEN_ADDR"), "8080"); err != nil {
+			fmt.Fprintln(os.Stderr, "unhealthy:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("gateway exited", "err", err)
 		os.Exit(1)

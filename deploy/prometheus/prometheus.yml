@@ -1,5 +1,5 @@
-# Local Prometheus config: scrapes the gateway's /metrics endpoint.
-# Kubernetes deployments scrape through a ServiceMonitor or pod annotations instead (see the Helm chart).
+# Prometheus config for the Docker Compose stack. Kubernetes scrapes through pod annotations or a
+# ServiceMonitor instead (see the Helm chart).
 global:
   scrape_interval: 5s
 scrape_configs:
@@ -7,3 +7,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["gateway:8080"]
+  - job_name: infermesh-telemetry-consumer
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["telemetry-consumer:9100"]

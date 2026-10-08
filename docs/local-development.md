@@ -43,6 +43,50 @@ The default local model (`Qwen2.5-0.5B-Instruct-4bit`) was chosen to fit
 comfortably in 16 GB. Do not assume an 8B model fits on a laptop; override
 `LOCAL_MODEL` to try others.
 
+## Docker Compose
+
+The whole stack runs from `docker-compose.yml` on any machine with Docker, with no NVIDIA GPU:
+gateway, Kafka (single-node KRaft), telemetry consumer, Prometheus and Grafana. Images are built from
+one multi-stage `deploy/docker/Dockerfile` (static binary on a distroless, non-root base; the build
+cross-compiles, so no emulation on Apple Silicon).
+
+| Command | Engine behind the gateway |
+|---|---|
+| `make up` | `mock` backend: no model, no GPU. Good for trying the stack and for load-testing the gateway itself |
+| `make up-host-model` | A real model served **on the host** (`make local-model`, mlx-lm on Apple Silicon); the gateway reaches it at `host.docker.internal:8000` |
+| `make up-cpu-model` | A **llama.cpp** container serving a small GGUF model on CPU. Fully self-contained; the first start downloads the model |
+| `make up-gpu` | **vLLM in a container on an NVIDIA GPU.** Requires an NVIDIA GPU and the NVIDIA Container Toolkit. See below |
+
+`make down` stops everything (volumes are kept). The architecture is identical in every mode; only the
+engine changes, selected with `BACKENDS` / `BACKEND_VLLM_URL` / `BACKEND_VLLM_MODEL`.
+
+| Service | URL (bound to 127.0.0.1 only) |
+|---|---|
+| Gateway | http://localhost:8080 (`/v1/chat/completions`, `/healthz`, `/readyz`, `/v1/backends`, `/metrics`) |
+| Grafana | http://localhost:3000, login `admin` / `admin` (override with `GRAFANA_USER` / `GRAFANA_PASSWORD`); dashboard *InferMesh Overview* |
+| Prometheus | http://localhost:9090 |
+| Consumer metrics | http://localhost:9100/metrics |
+| Kafka (from the host) | `localhost:29092`; containers use `kafka:9092` |
+
+Notes:
+
+- The llama.cpp engine is a CPU **stand-in** for vLLM, like mlx-lm: the gateway only needs an
+  OpenAI-compatible server. It is not a performance proxy for vLLM on a GPU.
+- `host.docker.internal` reaches a loopback-bound host service on Docker Desktop (macOS/Windows). On
+  Linux, bind the host model to `0.0.0.0` (or the Docker bridge address); the compose file maps the name
+  with `host-gateway`.
+- Containers have health checks (`/app healthcheck`; distroless images have no shell or curl), and
+  `docker compose stop` shuts the gateway down gracefully within a second.
+- Change the default Grafana password if the ports are ever exposed beyond localhost.
+
+### GPU profile (not tested on the development machine)
+
+`docker compose --profile gpu` adds a `vllm` service (`vllm/vllm-openai`, pinned by `VLLM_VERSION`) with
+an `nvidia` device reservation (`VLLM_GPUS`, default 1). Set `VLLM_MODEL` (default
+`Qwen/Qwen2.5-0.5B-Instruct`; use a larger model on a real GPU) and, for gated models, `HF_TOKEN`. The
+file was validated with `docker compose config` only; it has **not been run**, because this repo was
+developed on an Apple Silicon Mac. Triton + TensorRT-LLM is added in a later phase under `deploy/triton/`.
+
 ## Streaming
 
 ```bash

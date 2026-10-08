@@ -1,0 +1,10 @@
+.git
+.github
+.venv-local
+bin
+frontend/node_modules
+benchmarks/results
+docs
+deploy
+*.md
+**/*_test.go
