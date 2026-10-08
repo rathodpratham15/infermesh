@@ -81,9 +81,13 @@ func newLogger(level string) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l}))
 }
 
-// factories maps a backend kind to its constructor. Engines are registered in
-// later phases.
-var factories = map[string]func(config.Backend) (backend.InferenceBackend, error){}
+// factories maps a backend kind to its constructor. Real engines (vLLM,
+// Triton) are registered in later phases.
+var factories = map[string]func(config.Backend) (backend.InferenceBackend, error){
+	"mock": func(bc config.Backend) (backend.InferenceBackend, error) {
+		return backend.NewMock(bc.Name, 20*time.Millisecond), nil
+	},
+}
 
 func newBackend(bc config.Backend) (backend.InferenceBackend, error) {
 	f, ok := factories[bc.Kind]

@@ -8,7 +8,7 @@ import (
 )
 
 func TestFirstSkipsUnhealthy(t *testing.T) {
-	a, b := newFake("a"), newFake("b")
+	a, b := backend.NewMock("a", 0), backend.NewMock("b", 0)
 	r := NewFirst([]backend.InferenceBackend{a, b})
 
 	got, err := r.Pick(context.Background())
