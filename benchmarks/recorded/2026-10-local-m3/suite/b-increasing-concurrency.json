@@ -1,0 +1,189 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T03:44:59.561016Z",
+  "finished_at": "2026-10-09T03:51:55.307489Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "scenario": "b-increasing-concurrency",
+    "target": "http://localhost:18090",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    },
+    "gateway_backends_before": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 200,
+          "failures": 0,
+          "latency_ewma_ms": 1202.86921
+        }
+      ],
+      "queue_depth": 0
+    },
+    "gateway_backends_after": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 1271,
+          "failures": 3,
+          "latency_ewma_ms": 1817.36903
+        }
+      ],
+      "queue_depth": 0
+    }
+  },
+  "config": {
+    "concurrency": [
+      1,
+      5,
+      10,
+      25,
+      50
+    ],
+    "duration": "1m0s",
+    "warmup": "10s",
+    "stream": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 60.850356583,
+      "requests": 54,
+      "succeeded": 54,
+      "failed": 0,
+      "requests_per_sec": 0.8874229015625225,
+      "input_tokens": 1995,
+      "output_tokens": 6373,
+      "output_tokens_per_sec": 104.73233614181399,
+      "latency": {
+        "count": 54,
+        "mean_ms": 1126.838895851852,
+        "min_ms": 127.580208,
+        "max_ms": 1651.319458,
+        "p50_ms": 1205.935083,
+        "p95_ms": 1411.953,
+        "p99_ms": 1651.319458
+      },
+      "backends": {
+        "vllm": 54
+      }
+    },
+    {
+      "concurrency": 5,
+      "wall_seconds": 60.821393458,
+      "requests": 187,
+      "succeeded": 187,
+      "failed": 0,
+      "requests_per_sec": 3.0745760556954713,
+      "input_tokens": 6933,
+      "output_tokens": 21895,
+      "output_tokens_per_sec": 359.9884638473388,
+      "latency": {
+        "count": 187,
+        "mean_ms": 1622.8379048449199,
+        "min_ms": 165.492125,
+        "max_ms": 3054.708833,
+        "p50_ms": 1618.476667,
+        "p95_ms": 2297.380042,
+        "p99_ms": 2710.109167
+      },
+      "backends": {
+        "vllm": 187
+      }
+    },
+    {
+      "concurrency": 10,
+      "wall_seconds": 62.415007542,
+      "requests": 204,
+      "succeeded": 203,
+      "failed": 1,
+      "requests_per_sec": 3.2524229026712566,
+      "input_tokens": 7522,
+      "output_tokens": 23814,
+      "output_tokens_per_sec": 381.54285223750395,
+      "latency": {
+        "count": 203,
+        "mean_ms": 3006.398889142857,
+        "min_ms": 188.133708,
+        "max_ms": 6759.455834,
+        "p50_ms": 3019.655833,
+        "p95_ms": 5281.479291,
+        "p99_ms": 6565.817583
+      },
+      "errors": {
+        "http_502": 1
+      },
+      "backends": {
+        "vllm": 203
+      }
+    },
+    {
+      "concurrency": 25,
+      "wall_seconds": 69.656031417,
+      "requests": 194,
+      "succeeded": 193,
+      "failed": 1,
+      "requests_per_sec": 2.7707579096000168,
+      "input_tokens": 7159,
+      "output_tokens": 22545,
+      "output_tokens_per_sec": 323.6618501136393,
+      "latency": {
+        "count": 193,
+        "mean_ms": 8473.074110720208,
+        "min_ms": 187.865833,
+        "max_ms": 32070.95275,
+        "p50_ms": 6862.085916,
+        "p95_ms": 19920.481959,
+        "p99_ms": 28369.9015
+      },
+      "errors": {
+        "http_502": 1
+      },
+      "backends": {
+        "vllm": 193
+      }
+    },
+    {
+      "concurrency": 50,
+      "wall_seconds": 81.006859541,
+      "requests": 211,
+      "succeeded": 211,
+      "failed": 0,
+      "requests_per_sec": 2.6047176892866286,
+      "input_tokens": 7821,
+      "output_tokens": 24864,
+      "output_tokens_per_sec": 306.93696979347266,
+      "latency": {
+        "count": 211,
+        "mean_ms": 17077.385164099527,
+        "min_ms": 1804.731583,
+        "max_ms": 77146.037792,
+        "p50_ms": 13151.3855,
+        "p95_ms": 41013.981875,
+        "p99_ms": 60356.829666
+      },
+      "backends": {
+        "vllm": 211
+      }
+    }
+  ]
+}

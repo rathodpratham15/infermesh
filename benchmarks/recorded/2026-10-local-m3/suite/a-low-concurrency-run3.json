@@ -1,0 +1,88 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T03:43:48.475637Z",
+  "finished_at": "2026-10-09T03:44:59.549267Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "repeat 3 of 3",
+    "scenario": "a-low-concurrency",
+    "target": "http://localhost:18090",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    },
+    "gateway_backends_before": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 134,
+          "failures": 0,
+          "latency_ewma_ms": 1078.832867
+        }
+      ],
+      "queue_depth": 0
+    },
+    "gateway_backends_after": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 200,
+          "failures": 0,
+          "latency_ewma_ms": 1202.86921
+        }
+      ],
+      "queue_depth": 0
+    }
+  },
+  "config": {
+    "concurrency": [
+      1
+    ],
+    "duration": "1m0s",
+    "warmup": "10s",
+    "stream": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 60.396946292,
+      "requests": 54,
+      "succeeded": 54,
+      "failed": 0,
+      "requests_per_sec": 0.8940849383167022,
+      "input_tokens": 1994,
+      "output_tokens": 6373,
+      "output_tokens_per_sec": 105.51857984985821,
+      "latency": {
+        "count": 54,
+        "mean_ms": 1118.437933685185,
+        "min_ms": 93.726375,
+        "max_ms": 2458.001583,
+        "p50_ms": 1140.462,
+        "p95_ms": 1467.510625,
+        "p99_ms": 2458.001583
+      },
+      "backends": {
+        "vllm": 54
+      }
+    }
+  ]
+}

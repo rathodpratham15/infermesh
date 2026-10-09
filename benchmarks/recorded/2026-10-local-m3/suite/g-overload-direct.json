@@ -1,0 +1,67 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T04:09:40.770159Z",
+  "finished_at": "2026-10-09T04:10:54.297331Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "overload check at 16 clients: direct",
+    "target": "http://localhost:8000",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    }
+  },
+  "config": {
+    "concurrency": [
+      16
+    ],
+    "duration": "1m0s",
+    "warmup": "10s",
+    "stream": true,
+    "max_tokens": 64,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 16,
+      "wall_seconds": 61.91962675,
+      "requests": 321,
+      "succeeded": 257,
+      "failed": 64,
+      "requests_per_sec": 4.150541815079659,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "output_tokens_per_sec": 0,
+      "latency": {
+        "count": 257,
+        "mean_ms": 3812.6683516887156,
+        "min_ms": 700.14075,
+        "max_ms": 6821.457709,
+        "p50_ms": 3553.696958,
+        "p95_ms": 6350.966291,
+        "p99_ms": 6819.057625
+      },
+      "ttft": {
+        "count": 257,
+        "mean_ms": 590.9038472918288,
+        "min_ms": 149.039625,
+        "max_ms": 1336.882667,
+        "p50_ms": 547.270625,
+        "p95_ms": 1295.770166,
+        "p99_ms": 1335.159959
+      },
+      "errors": {
+        "connection": 64
+      },
+      "missing_usage": 257
+    }
+  ]
+}
