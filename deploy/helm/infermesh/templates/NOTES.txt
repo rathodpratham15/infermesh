@@ -14,5 +14,7 @@ vLLM is enabled. The first start downloads the model, which can take minutes; wa
 {{- end }}
 {{- if .Values.triton.enabled }}
 
-Triton is deployed but not yet wired into the gateway's backend list (see docs/kubernetes.md).
+Triton + TensorRT-LLM is enabled and registered as the "triton" backend. It needs an NVIDIA GPU and may take a
+long time to start (engine build). To compare it with vLLM, run each on the same hardware and model one at a
+time (docs/gpu-deployment.md); with both enabled, traffic is split between them.
 {{- end }}

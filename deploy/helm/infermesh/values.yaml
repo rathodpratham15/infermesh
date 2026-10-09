@@ -85,31 +85,45 @@ vllm:
   podAnnotations: {}
   startupProbe: {failureThreshold: 120, periodSeconds: 10}   # model loading can take minutes
 
-# NVIDIA Triton Inference Server (NVIDIA GPU only). Disabled by default. The gateway's Triton backend
-# and the TensorRT-LLM model repository arrive with the Triton phase; this component only deploys the
-# server and is not yet wired into the gateway's backend list.
+# NVIDIA Triton Inference Server + TensorRT-LLM, served through Triton's OpenAI-compatible frontend
+# (NVIDIA GPU only; disabled by default). Build the image from deploy/triton/Dockerfile (see
+# docs/gpu-deployment.md). The gateway reaches it as an OpenAI-compatible backend of kind "triton",
+# which is registered automatically when triton.enabled=true.
+#
+# NOT TESTED on a GPU: this component has only been rendered and schema-validated.
 triton:
   enabled: false
   replicaCount: 1
   image:
-    repository: nvcr.io/nvidia/tritonserver
-    tag: ""                           # required when enabled: pick the TensorRT-LLM flavoured tag
+    repository: infermesh-triton      # your build of deploy/triton/Dockerfile, pushed where the cluster can pull it
+    tag: ""                           # required when enabled
     pullPolicy: IfNotPresent
-  args: []
+  # Model served. If /models is empty on first start, the entrypoint builds a TensorRT-LLM engine with
+  # `triton import -m <importModel>` (slow, memory hungry). Or mount a prepared repository.
+  importModel: ""                     # e.g. llama-3.1-8b-instruct
+  model: ""                           # client-facing model name the gateway sends (the model name in the repository)
+  tokenizer: ""                       # HF id or path for chat templates (recommended)
+  extraArgs: ""                       # appended to `triton start`
   env: []
+  hfToken: ""
+  existingSecret: ""                  # Secret with key HF_TOKEN
   runtimeClassName: ""
-  httpPort: 8000
-  grpcPort: 8001
-  metricsPort: 8002
+  port: 9000                          # the OpenAI frontend
+  maxConcurrent: 16
+  weight: 1
+  timeout: 2m
+  streamUsage: false                  # request token usage in streams; NVIDIA does not document it for TRT-LLM, enable only after verifying
   modelRepository:
-    mountPath: /models
     persistence: {enabled: false, size: 100Gi, storageClass: "", accessMode: ReadWriteOnce, existingClaim: ""}
+  engineCache:
+    persistence: {enabled: false, size: 100Gi, storageClass: "", accessMode: ReadWriteOnce}
   shmSize: 1Gi
   resources: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
   podAnnotations: {}
+  startupProbe: {failureThreshold: 360, periodSeconds: 10}   # engine builds can take a long time
 
 # Single-node KRaft Kafka for telemetry events only (never in the request path). For anything beyond
 # a demo use a managed or operator-run cluster: set enabled=false and externalBrokers.

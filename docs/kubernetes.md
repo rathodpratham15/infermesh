@@ -37,10 +37,11 @@ With no engine configured the gateway serves the mock backend. To route to a rea
   cache PVC and Hugging Face token Secret (or `vllm.existingSecret`). The image, args, model, resources,
   `nodeSelector`, `tolerations`, `affinity` and `runtimeClassName` are all values. GPUs are requested as
   `resources.limits."nvidia.com/gpu"`. The gateway's backend URL is derived automatically.
-- **Triton** (`triton.enabled`): Deployment, Service and optional model-repository PVC for NVIDIA Triton. It
-  needs an image tag chosen by you (`triton.image.tag`, rendering fails without one). **It is not yet wired
-  into the gateway's backends**; the gateway's Triton backend and the TensorRT-LLM model repository arrive
-  with the Triton phase.
+- **Triton** (`triton.enabled`, `values-triton.yaml`): Deployment, Service and optional PVCs for the model
+  repository and engine cache, running the image built from `deploy/triton/Dockerfile` (Triton + TensorRT-LLM
+  behind Triton's OpenAI-compatible frontend). It is registered automatically as the gateway's `triton` backend.
+  `triton.image.tag` and `triton.model` are required (rendering fails without them). NVIDIA GPU only; see
+  `gpu-deployment.md`. Not tested on a GPU.
 - **Kafka**: single-node KRaft StatefulSet (telemetry only; events are lost on restart unless
   `kafka.persistence.enabled`). For real use set `kafka.enabled=false` and `kafka.externalBrokers`. With
   neither, events are disabled and the consumer is not deployed.
@@ -85,9 +86,9 @@ created by `helm install`:
 
 **Not verified** (no NVIDIA hardware or extra infrastructure here):
 
-- Anything scheduled on a GPU: `values-gpu.yaml`, `nvidia.com/gpu` scheduling, the real `vllm/vllm-openai`
-  image and its arguments, `runtimeClassName`, and the Triton component. These were only rendered and
-  schema-validated.
+- Anything scheduled on a GPU: `values-gpu.yaml`, `values-triton.yaml`, `nvidia.com/gpu` scheduling, the real
+  `vllm/vllm-openai` image and its arguments, `runtimeClassName`, and the Triton component. These were only
+  rendered and schema-validated.
 - GPU autoscaling of any kind, and the optional `activeRequests` custom-metric HPA (it needs a
   custom-metrics pipeline that was not installed).
 - The `ServiceMonitor` against a live Prometheus Operator, and the Grafana sidecar picking up the dashboard.

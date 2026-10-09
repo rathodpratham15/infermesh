@@ -29,7 +29,7 @@ run-vllm: ## gateway pointed at the local model
 	BACKENDS=vllm BACKEND_VLLM_URL=http://127.0.0.1:$(LOCAL_MODEL_PORT) BACKEND_VLLM_MODEL=$(LOCAL_MODEL) go run ./cmd/gateway
 
 # --- Docker Compose (see docker-compose.yml) ---
-.PHONY: up up-host-model up-cpu-model up-gpu down logs images
+.PHONY: up up-host-model up-cpu-model up-gpu up-triton triton-check down logs images
 
 images: ## build the container images
 	docker compose build
@@ -49,8 +49,18 @@ up-gpu: ## add vLLM in a container; REQUIRES an NVIDIA GPU + NVIDIA Container To
 	BACKENDS=vllm BACKEND_VLLM_URL=http://vllm:8000 BACKEND_VLLM_MODEL=$${VLLM_MODEL:-Qwen/Qwen2.5-0.5B-Instruct} \
 	  docker compose --profile gpu up -d --build
 
+up-triton: ## add Triton + TensorRT-LLM; REQUIRES an NVIDIA GPU; set TRITON_TAG, TRITON_CLI_REF, TRITON_MODEL_NAME
+	@test -n "$(TRITON_TAG)" && test -n "$(TRITON_CLI_REF)" && test -n "$(TRITON_MODEL_NAME)" || \
+	  { echo "set TRITON_TAG, TRITON_CLI_REF and TRITON_MODEL_NAME (see docs/gpu-deployment.md)"; exit 1; }
+	BACKENDS=triton BACKEND_TRITON_URL=http://triton:9000 BACKEND_TRITON_MODEL=$(TRITON_MODEL_NAME) \
+	  docker compose --profile triton up -d --build
+
+triton-check: ## sanity-check a Triton model repository: make triton-check REPO=/path/to/model_repo
+	@test -n "$(REPO)" || { echo "usage: make triton-check REPO=/path/to/model_repo"; exit 1; }
+	go run ./cmd/tritonrepo-check $(REPO)
+
 down: ## stop the stack (keeps volumes)
-	docker compose --profile cpu-model --profile gpu down
+	docker compose --profile cpu-model --profile gpu --profile triton down
 
 logs:
 	docker compose logs -f --tail=100

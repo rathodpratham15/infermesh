@@ -81,6 +81,29 @@ func TestMultipleBackends(t *testing.T) {
 	}
 }
 
+func TestStreamUsageDefaultsByKind(t *testing.T) {
+	c, err := LoadFrom(env(map[string]string{
+		"BACKENDS":           "vllm,triton",
+		"BACKEND_VLLM_URL":   "http://v:8000",
+		"BACKEND_TRITON_URL": "http://t:9000",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Backends[0].StreamUsage || c.Backends[1].StreamUsage {
+		t.Fatalf("defaults: vllm=%v triton=%v, want true/false", c.Backends[0].StreamUsage, c.Backends[1].StreamUsage)
+	}
+	c, err = LoadFrom(env(map[string]string{
+		"BACKENDS": "triton", "BACKEND_TRITON_URL": "http://t:9000", "BACKEND_TRITON_STREAM_USAGE": "true",
+	}))
+	if err != nil || !c.Backends[0].StreamUsage {
+		t.Fatalf("explicit opt-in not honoured: %+v %v", c.Backends, err)
+	}
+	if _, err := LoadFrom(env(map[string]string{"BACKENDS": "mock", "BACKEND_MOCK_STREAM_USAGE": "maybe"})); err == nil {
+		t.Fatal("expected an error for a non-boolean STREAM_USAGE")
+	}
+}
+
 func TestErrors(t *testing.T) {
 	cases := map[string]map[string]string{
 		"missing url":     {"BACKENDS": "vllm"},

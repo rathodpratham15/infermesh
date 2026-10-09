@@ -1,12 +1,26 @@
 {{- $t := .Values.triton }}
 {{- if $t.enabled }}
-{{- if not $t.image.tag }}{{ fail "triton.image.tag is required when triton.enabled=true (choose a TensorRT-LLM flavoured tritonserver tag)" }}{{ end }}
-{{- $claim := ternary $t.modelRepository.persistence.existingClaim (printf "%s-triton-models" (include "infermesh.fullname" .)) (ne $t.modelRepository.persistence.existingClaim "") }}
+{{- if not $t.image.tag }}{{ fail "triton.image.tag is required when triton.enabled=true (the tag of your build of deploy/triton/Dockerfile)" }}{{ end }}
+{{- if not $t.model }}{{ fail "triton.model is required when triton.enabled=true (the client-facing model name in the Triton model repository)" }}{{ end }}
+{{- $fn := include "infermesh.fullname" . }}
+{{- $secretName := ternary $t.existingSecret (printf "%s-triton" $fn) (ne $t.existingSecret "") }}
+{{- if and $t.hfToken (eq $t.existingSecret "") }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  HF_TOKEN: {{ $t.hfToken | quote }}
+---
+{{- end }}
+{{- $repoClaim := ternary $t.modelRepository.persistence.existingClaim (printf "%s-triton-models" $fn) (ne $t.modelRepository.persistence.existingClaim "") }}
 {{- if and $t.modelRepository.persistence.enabled (eq $t.modelRepository.persistence.existingClaim "") }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ $claim }}
+  name: {{ $repoClaim }}
   labels: {{- include "infermesh.labels" . | nindent 4 }}
 spec:
   accessModes: [{{ $t.modelRepository.persistence.accessMode }}]
@@ -17,10 +31,25 @@ spec:
     requests: {storage: {{ $t.modelRepository.persistence.size }}}
 ---
 {{- end }}
+{{- if $t.engineCache.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fn }}-triton-engines
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+spec:
+  accessModes: [{{ $t.engineCache.persistence.accessMode }}]
+  {{- with $t.engineCache.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests: {storage: {{ $t.engineCache.persistence.size }}}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "infermesh.fullname" . }}-triton
+  name: {{ $fn }}-triton
   labels: {{- include "infermesh.labels" . | nindent 4 }}
     app.kubernetes.io/component: triton
 spec:
@@ -28,14 +57,14 @@ spec:
   selector:
     matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "triton") | nindent 6 }}
   strategy:
-    type: Recreate
+    type: Recreate   # a rolling update would need a second GPU; recreate frees it first
   template:
     metadata:
       labels: {{- include "infermesh.selector" (dict "ctx" . "component" "triton") | nindent 8 }}
       annotations:
         {{- if $.Values.monitoring.scrapeAnnotations }}
         prometheus.io/scrape: "true"
-        prometheus.io/port: {{ $t.metricsPort | quote }}
+        prometheus.io/port: {{ $t.port | quote }}
         prometheus.io/path: /metrics
         {{- end }}
         {{- with $t.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
@@ -53,43 +82,55 @@ spec:
         - name: triton
           image: {{ include "infermesh.image" (dict "image" $t.image "ctx" .) }}
           imagePullPolicy: {{ $t.image.pullPolicy }}
-          command: ["tritonserver"]
-          args:
-            {{- if $t.args }}
-            {{- toYaml $t.args | nindent 12 }}
-            {{- else }}
-            - --model-repository={{ $t.modelRepository.mountPath }}
-            - --http-port={{ $t.httpPort }}
-            - --grpc-port={{ $t.grpcPort }}
-            - --metrics-port={{ $t.metricsPort }}
+          env:
+            - {name: MODEL_REPO, value: /models}
+            - {name: ENGINE_DEST_PATH, value: /engines}
+            {{- with $t.importModel }}
+            - {name: TRITON_IMPORT_MODEL, value: {{ . | quote }}}
             {{- end }}
-          {{- with $t.env }}
-          env: {{ toYaml . | nindent 12 }}
-          {{- end }}
+            {{- with $t.tokenizer }}
+            - {name: TRITON_TOKENIZER, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $t.extraArgs }}
+            - {name: TRITON_EXTRA_ARGS, value: {{ . | quote }}}
+            {{- end }}
+            {{- if or $t.hfToken $t.existingSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ $secretName }}, key: HF_TOKEN}
+            {{- end }}
+            {{- with $t.env }}{{ toYaml . | nindent 12 }}{{ end }}
           ports:
-            - {name: http, containerPort: {{ $t.httpPort }}}
-            - {name: grpc, containerPort: {{ $t.grpcPort }}}
-            - {name: metrics, containerPort: {{ $t.metricsPort }}}
+            - {name: http, containerPort: {{ $t.port }}}
           startupProbe:
-            httpGet: {path: /v2/health/ready, port: http}
-            periodSeconds: 10
-            failureThreshold: 180
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: {{ $t.startupProbe.periodSeconds }}
+            failureThreshold: {{ $t.startupProbe.failureThreshold }}
           readinessProbe:
-            httpGet: {path: /v2/health/ready, port: http}
+            httpGet: {path: /health/ready, port: http}
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
-            httpGet: {path: /v2/health/live, port: http}
+            tcpSocket: {port: http}
             periodSeconds: 20
+            failureThreshold: 6
           resources: {{ toYaml $t.resources | nindent 12 }}
           volumeMounts:
             - {name: shm, mountPath: /dev/shm}
-            - {name: models, mountPath: {{ $t.modelRepository.mountPath }}}
+            - {name: models, mountPath: /models}
+            - {name: engines, mountPath: /engines}
       volumes:
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: {{ $t.shmSize }}}
         - name: models
           {{- if $t.modelRepository.persistence.enabled }}
-          persistentVolumeClaim: {claimName: {{ $claim }}}
+          persistentVolumeClaim: {claimName: {{ $repoClaim }}}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: engines
+          {{- if $t.engineCache.persistence.enabled }}
+          persistentVolumeClaim: {claimName: {{ $fn }}-triton-engines}
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -106,13 +147,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "infermesh.fullname" . }}-triton
+  name: {{ $fn }}-triton
   labels: {{- include "infermesh.labels" . | nindent 4 }}
     app.kubernetes.io/component: triton
 spec:
   selector: {{- include "infermesh.selector" (dict "ctx" . "component" "triton") | nindent 4 }}
   ports:
-    - {name: http, port: {{ $t.httpPort }}, targetPort: http}
-    - {name: grpc, port: {{ $t.grpcPort }}, targetPort: grpc}
-    - {name: metrics, port: {{ $t.metricsPort }}, targetPort: metrics}
+    - {name: http, port: {{ $t.port }}, targetPort: http}
 {{- end }}

@@ -4,6 +4,7 @@
 #   make up-host-model      same, gateway routed to a real model served on the host (Apple Silicon)
 #   make up-cpu-model       same, plus a llama.cpp server container as the engine (CPU)
 #   make up-gpu             same, plus vLLM in a container on an NVIDIA GPU machine
+#   make up-triton          same, plus Triton + TensorRT-LLM on an NVIDIA GPU machine
 #
 # The architecture is the same in every mode: client -> gateway -> an OpenAI-compatible
 # engine, with telemetry flowing gateway -> Kafka -> consumer and metrics to Prometheus/Grafana.
@@ -33,6 +34,10 @@ services:
       BACKEND_VLLM_URL: ${BACKEND_VLLM_URL:-http://host.docker.internal:8000}
       BACKEND_VLLM_MODEL: ${BACKEND_VLLM_MODEL:-}
       BACKEND_VLLM_MAX_CONCURRENT: ${BACKEND_VLLM_MAX_CONCURRENT:-16}
+      BACKEND_TRITON_URL: ${BACKEND_TRITON_URL:-http://triton:9000}
+      BACKEND_TRITON_MODEL: ${BACKEND_TRITON_MODEL:-}
+      BACKEND_TRITON_MAX_CONCURRENT: ${BACKEND_TRITON_MAX_CONCURRENT:-16}
+      BACKEND_TRITON_STREAM_USAGE: ${BACKEND_TRITON_STREAM_USAGE:-false}
       ROUTING_POLICY: ${ROUTING_POLICY:-least_outstanding}
       KAFKA_BROKERS: kafka:9092
       WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-localhost:5173}
@@ -171,9 +176,49 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  # NVIDIA Triton + TensorRT-LLM behind Triton's OpenAI-compatible frontend. REQUIRES an NVIDIA GPU
+  # and the NVIDIA Container Toolkit. Build args are required (see deploy/triton/Dockerfile): set
+  # TRITON_TAG and TRITON_CLI_REF. NOT RUN on the machine this repo was developed on.
+  triton:
+    profiles: ["triton"]
+    build:
+      context: .
+      dockerfile: deploy/triton/Dockerfile
+      args:
+        TRITON_TAG: ${TRITON_TAG:-}
+        TRITON_CLI_REF: ${TRITON_CLI_REF:-}
+    image: infermesh-triton:${TRITON_TAG:-unset}
+    ipc: host
+    ulimits:
+      memlock: -1
+    environment:
+      TRITON_IMPORT_MODEL: ${TRITON_IMPORT_MODEL:-}
+      TRITON_TOKENIZER: ${TRITON_TOKENIZER:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - triton-models:/models
+      - triton-engines:/engines
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${TRITON_GPUS:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/health/ready')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 300s
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   prometheus-data:
   grafana-data:
   llamacpp-cache:
   hf-cache:
+  triton-models:
+  triton-engines:
