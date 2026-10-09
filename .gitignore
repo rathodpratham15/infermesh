@@ -8,3 +8,6 @@ benchmarks/results/
 
 # local-only prompt files (not part of the repository)
 prompts/
+
+frontend/dist/
+frontend/e2e/out/

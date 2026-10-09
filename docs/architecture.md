@@ -86,6 +86,7 @@ Container images are static Go binaries on a distroless non-root base (`deploy/d
 | `cmd/gateway` | The gateway binary |
 | `cmd/telemetry-consumer` | Kafka consumer that aggregates events into metrics |
 | `cmd/inferbench` | Load generator and report/compare tool |
+| `frontend/` | Web test console (React + Vite): streaming chat, backend pinning, fleet status, request log. Calls the gateway over HTTP/SSE/WebSocket |
 | `cmd/tritonrepo-check` | Sanity checker for Triton model repositories |
 | `internal/gateway` | HTTP, SSE and WebSocket handlers, retries, per-request instrumentation |
 | `internal/router` | Routing policies, concurrency limits, queue, health checks |

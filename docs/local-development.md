@@ -87,6 +87,20 @@ an `nvidia` device reservation (`VLLM_GPUS`, default 1). Set `VLLM_MODEL` (defau
 file was validated with `docker compose config` only; it has **not been run**, because this repo was
 developed on an Apple Silicon Mac. Triton + TensorRT-LLM is added in a later phase under `deploy/triton/`.
 
+## Web UI
+
+```bash
+make frontend-install        # Node 20.19+ or 22.12+ (see frontend/.nvmrc)
+make up                      # the gateway stack; its defaults already allow the UI's origin
+make frontend-dev            # http://localhost:5173, real gateway (VITE_MOCK=false)
+```
+
+Without a gateway, `cd frontend && npm run dev` starts in **mock mode** (simulated data, with a persistent banner). In dev the
+UI's HTTP calls go through the Vite proxy; the WebSocket connects to the gateway directly, so the gateway needs
+`WS_ALLOWED_ORIGINS=localhost:5173` (Compose sets it). Calling the gateway directly from the browser instead (a production
+build, or another URL) needs `CORS_ALLOWED_ORIGINS`; see "Browser clients" below. `make frontend-test` runs the type check
+and unit tests, and `make frontend-e2e` runs the optional real-browser test. Details: `frontend/README.md`.
+
 ## Streaming
 
 ```bash
