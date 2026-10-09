@@ -23,12 +23,17 @@ def f(v, d=0):
 def table(rep):
     stream = rep["config"]["stream"]
     head = ["conc", "reqs", "failed", "req/s", "tok/s", "p50 ms", "p95 ms", "p99 ms"]
+    has_wall = all("wall_requests_per_sec" in l for l in rep["levels"])
+    if has_wall:
+        head.append("req/s (wall)")
     if stream:
         head += ["TTFT p50", "TTFT p95", "TTFT p99"]
     rows = []
     for l in rep["levels"]:
         r = [l["concurrency"], l["requests"], l["failed"], f(l["requests_per_sec"], 2), f(l["output_tokens_per_sec"], 1),
              f(l["latency"]["p50_ms"]), f(l["latency"]["p95_ms"]), f(l["latency"]["p99_ms"])]
+        if has_wall:
+            r.append(f(l["wall_requests_per_sec"], 2))
         if stream:
             t = l.get("ttft")
             r += [f(t["p50_ms"]), f(t["p95_ms"]), f(t["p99_ms"])] if t else ["-", "-", "-"]

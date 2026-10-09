@@ -19,22 +19,33 @@ type LevelConfig struct {
 
 // LevelResult is the measured outcome of one load level.
 type LevelResult struct {
-	Concurrency     int            `json:"concurrency"`
-	TargetRate      float64        `json:"target_rate_rps,omitempty"`
-	WallSeconds     float64        `json:"wall_seconds"`
-	Requests        int            `json:"requests"`
-	Succeeded       int            `json:"succeeded"`
-	Failed          int            `json:"failed"`
-	RequestsPerSec  float64        `json:"requests_per_sec"`
-	InputTokens     int            `json:"input_tokens"`
-	OutputTokens    int            `json:"output_tokens"`
-	TokensPerSec    float64        `json:"output_tokens_per_sec"`
-	Latency         Summary        `json:"latency"`
-	TTFT            *Summary       `json:"ttft,omitempty"`
-	Errors          map[string]int `json:"errors,omitempty"`
-	Backends        map[string]int `json:"backends,omitempty"`
-	DroppedArrivals int            `json:"dropped_arrivals,omitempty"`
-	MissingUsage    int            `json:"missing_usage,omitempty"`
+	Concurrency  int     `json:"concurrency"`
+	TargetRate   float64 `json:"target_rate_rps,omitempty"`
+	WallSeconds  float64 `json:"wall_seconds"`
+	DrainSeconds float64 `json:"drain_seconds"`
+	Requests     int     `json:"requests"`
+	Succeeded    int     `json:"succeeded"`
+	Failed       int     `json:"failed"`
+	// RequestsPerSec and TokensPerSec are STEADY-STATE throughput: completions inside the load
+	// window after the ramp-up (the last 80% of it), divided by that interval. They exclude both
+	// the ramp-up and the drain of requests still in flight when the window closes.
+	RequestsPerSec float64 `json:"requests_per_sec"`
+	TokensPerSec   float64 `json:"output_tokens_per_sec"`
+	// ThroughputBasis is "steady" normally, or "wall" if no request completed inside the steady
+	// window (requests slower than the window), in which case the wall-clock figures are used.
+	ThroughputBasis string `json:"throughput_basis"`
+	// WallRequestsPerSec and WallTokensPerSec divide ALL successes by total wall time (including
+	// ramp-up and drain). Kept so the two definitions can be compared.
+	WallRequestsPerSec float64        `json:"wall_requests_per_sec"`
+	WallTokensPerSec   float64        `json:"wall_output_tokens_per_sec"`
+	InputTokens        int            `json:"input_tokens"`
+	OutputTokens       int            `json:"output_tokens"`
+	Latency            Summary        `json:"latency"`
+	TTFT               *Summary       `json:"ttft,omitempty"`
+	Errors             map[string]int `json:"errors,omitempty"`
+	Backends           map[string]int `json:"backends,omitempty"`
+	DroppedArrivals    int            `json:"dropped_arrivals,omitempty"`
+	MissingUsage       int            `json:"missing_usage,omitempty"`
 }
 
 // NewClient returns an HTTP client sized for the given maximum concurrency.
@@ -68,7 +79,7 @@ func RunLevel(ctx context.Context, req *Requester, ds *Dataset, cfg LevelConfig)
 	dropped := drive(rctx, req, ds, cfg, collect)
 	wall := time.Since(start)
 
-	lr := aggregate(results, cfg, wall)
+	lr := aggregate(results, cfg, start, wall)
 	lr.DroppedArrivals = dropped
 	return lr
 }
@@ -129,8 +140,20 @@ func drive(ctx context.Context, req *Requester, ds *Dataset, cfg LevelConfig, re
 	}
 }
 
-func aggregate(rs []Result, cfg LevelConfig, wall time.Duration) LevelResult {
+// steadyStartFraction is the share of the load window treated as ramp-up. In a closed loop
+// every client always has a request in flight, so counting completions from t=0 undercounts
+// by the carry-out at the end of the window (about one request per client); after the first
+// round of requests the in-flight count is the same at both ends of the interval, so
+// completions in the interval equal the work done in it.
+const steadyStartFraction = 0.2
+
+func aggregate(rs []Result, cfg LevelConfig, start time.Time, wall time.Duration) LevelResult {
 	lr := LevelResult{Concurrency: cfg.Concurrency, TargetRate: cfg.Rate, WallSeconds: wall.Seconds(), Requests: len(rs)}
+	if d := wall - cfg.Duration; d > 0 {
+		lr.DrainSeconds = d.Seconds()
+	}
+	steadyFrom := time.Duration(steadyStartFraction * float64(cfg.Duration))
+	var inSteady, steadyTokens int
 	var lat, ttft []time.Duration
 	for _, r := range rs {
 		if r.Err != "" {
@@ -142,6 +165,12 @@ func aggregate(rs []Result, cfg LevelConfig, wall time.Duration) LevelResult {
 			continue
 		}
 		lr.Succeeded++
+		if off := r.CompletedAt.Sub(start); off > steadyFrom && off <= cfg.Duration {
+			inSteady++
+			if r.HasUsage {
+				steadyTokens += r.OutputTokens
+			}
+		}
 		lat = append(lat, r.Latency)
 		if r.HasTTFT {
 			ttft = append(ttft, r.TTFT)
@@ -165,8 +194,16 @@ func aggregate(rs []Result, cfg LevelConfig, wall time.Duration) LevelResult {
 		lr.TTFT = &s
 	}
 	if wall > 0 {
-		lr.RequestsPerSec = float64(lr.Succeeded) / wall.Seconds()
-		lr.TokensPerSec = float64(lr.OutputTokens) / wall.Seconds()
+		lr.WallRequestsPerSec = float64(lr.Succeeded) / wall.Seconds()
+		lr.WallTokensPerSec = float64(lr.OutputTokens) / wall.Seconds()
+	}
+	if window := (cfg.Duration - steadyFrom).Seconds(); inSteady > 0 && window > 0 {
+		lr.ThroughputBasis = "steady"
+		lr.RequestsPerSec = float64(inSteady) / window
+		lr.TokensPerSec = float64(steadyTokens) / window
+	} else {
+		lr.ThroughputBasis = "wall"
+		lr.RequestsPerSec, lr.TokensPerSec = lr.WallRequestsPerSec, lr.WallTokensPerSec
 	}
 	return lr
 }

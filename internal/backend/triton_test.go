@@ -3,9 +3,13 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -182,6 +186,30 @@ func TestVLLMAndTritonShareOneContract(t *testing.T) {
 		text, last := collect(t, ch)
 		if text != "Hello" || last.FinishReason != "stop" || last.Usage == nil || last.Usage.CompletionTokens != 2 {
 			t.Errorf("%s stream: text=%q last=%+v", name, text, last)
+		}
+	}
+}
+
+func TestIsConnectionError(t *testing.T) {
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{reset, true},
+		{fmt.Errorf("wrapped: %w", reset), true},
+		{io.ErrUnexpectedEOF, true},
+		{&HTTPError{Status: 503}, false},
+		{&HTTPError{Status: 429}, false},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+		{&net.OpError{Op: "read", Err: context.DeadlineExceeded}, false}, // net timeout, not a reset
+		{errors.New("decode failure"), false},
+	}
+	for _, c := range cases {
+		if got := IsConnectionError(c.err); got != c.want {
+			t.Errorf("IsConnectionError(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
 }

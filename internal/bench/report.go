@@ -40,6 +40,7 @@ type Config struct {
 	Warmup         string  `json:"warmup,omitempty"`
 	Rate           float64 `json:"rate_rps,omitempty"`
 	Stream         bool    `json:"stream"`
+	StreamUsage    bool    `json:"stream_usage"`
 	MaxTokens      int     `json:"max_tokens"`
 	RequestedModel string  `json:"requested_model,omitempty"`
 	Dataset        string  `json:"dataset"`
@@ -145,6 +146,9 @@ func (r *Report) PrintTable(w io.Writer) {
 		}
 		if l.DroppedArrivals > 0 {
 			notes = append(notes, fmt.Sprintf("%d arrivals dropped at the concurrency cap (server could not keep up with the offered rate)", l.DroppedArrivals))
+		}
+		if l.ThroughputBasis == "wall" {
+			notes = append(notes, "no request completed inside the steady-state window (requests are slower than it); throughput falls back to wall-clock and includes ramp-up and drain")
 		}
 		if l.MissingUsage > 0 {
 			notes = append(notes, fmt.Sprintf("%d responses had no token usage, so tokens/s undercounts", l.MissingUsage))

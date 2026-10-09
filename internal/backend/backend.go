@@ -51,6 +51,26 @@ type InferenceBackend interface {
 	Stream(ctx context.Context, req Request) (<-chan Token, error)
 }
 
+// IsConnectionError reports whether err is a transport-level failure (connection
+// refused or reset, truncated response) as opposed to an HTTP error response or a
+// timeout. These are often transient, so a retry on the same backend can succeed;
+// HTTP 5xx/429 responses are not included, because repeating a request against a
+// server that is overloaded or failing deterministically only adds load.
+func IsConnectionError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return !ne.Timeout()
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
 // Retryable reports whether a failed attempt is worth repeating on another
 // backend: server-side failures (5xx, 429) and connection-level errors.
 // Cancellations and timeouts are not retried (the client left or the budget is

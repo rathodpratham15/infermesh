@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -226,5 +228,109 @@ func TestBackendsEndpointReflectsRouting(t *testing.T) {
 	}
 	if len(out.Backends) != 2 || out.Backends[0].Completed != 2 || out.Backends[1].Completed != 2 {
 		t.Fatalf("unexpected stats: %+v", out.Backends)
+	}
+}
+
+// seqBackend returns the queued errors from consecutive calls, then succeeds.
+type seqBackend struct {
+	name  string
+	errs  []error
+	calls atomic.Int64
+}
+
+func (b *seqBackend) Name() string                 { return b.name }
+func (b *seqBackend) Health(context.Context) error { return nil }
+func (b *seqBackend) next() error {
+	i := int(b.calls.Add(1)) - 1
+	if i < len(b.errs) {
+		return b.errs[i]
+	}
+	return nil
+}
+func (b *seqBackend) Generate(context.Context, backend.Request) (backend.Response, error) {
+	if err := b.next(); err != nil {
+		return backend.Response{}, err
+	}
+	return backend.Response{Content: "ok", FinishReason: "stop"}, nil
+}
+func (b *seqBackend) Stream(context.Context, backend.Request) (<-chan backend.Token, error) {
+	if err := b.next(); err != nil {
+		return nil, err
+	}
+	ch := make(chan backend.Token, 2)
+	ch <- backend.Token{Text: "ok"}
+	ch <- backend.Token{FinishReason: "stop"}
+	close(ch)
+	return ch, nil
+}
+
+func connReset() error {
+	return &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+}
+
+func singleBackendServer(t *testing.T, b backend.InferenceBackend, retries int) *httptest.Server {
+	t.Helper()
+	s := New(router.NewPool([]router.Member{member(b, 10)}, router.Options{}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.MaxRetries = retries
+	s.SameBackendRetryDelay = time.Millisecond
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestSingleBackendRetriesTransientConnectionReset(t *testing.T) {
+	for name, body := range map[string]string{"non-streaming": chatBody, "streaming": streamBody} {
+		b := &seqBackend{name: "only", errs: []error{connReset()}}
+		ts := singleBackendServer(t, b, 1)
+		resp := post(t, ts.URL, body)
+		if resp.StatusCode != 200 || b.calls.Load() != 2 {
+			t.Fatalf("%s: status=%d calls=%d, want 200 after one same-backend retry", name, resp.StatusCode, b.calls.Load())
+		}
+	}
+}
+
+func TestSameBackendRetryIsBounded(t *testing.T) {
+	// Persistent resets: exactly MaxRetries+1 attempts, then a 502.
+	b := &seqBackend{name: "only", errs: []error{connReset(), connReset(), connReset(), connReset()}}
+	ts := singleBackendServer(t, b, 2)
+	if resp := post(t, ts.URL, chatBody); resp.StatusCode != http.StatusBadGateway || b.calls.Load() != 3 {
+		t.Fatalf("status=%d calls=%d, want 502 after 3 attempts", resp.StatusCode, b.calls.Load())
+	}
+	// Retries disabled: no retry at all.
+	b0 := &seqBackend{name: "only", errs: []error{connReset()}}
+	ts0 := singleBackendServer(t, b0, 0)
+	if resp := post(t, ts0.URL, chatBody); resp.StatusCode != http.StatusBadGateway || b0.calls.Load() != 1 {
+		t.Fatalf("MaxRetries=0: status=%d calls=%d", resp.StatusCode, b0.calls.Load())
+	}
+}
+
+func TestSingleBackendDoesNotRetryHTTPErrorsOnSameBackend(t *testing.T) {
+	// 5xx/429 from the only backend must not be hammered with a same-backend retry.
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		b := &seqBackend{name: "only", errs: []error{&backend.HTTPError{Status: status}, nil}}
+		ts := singleBackendServer(t, b, 3)
+		if resp := post(t, ts.URL, chatBody); resp.StatusCode != http.StatusBadGateway || b.calls.Load() != 1 {
+			t.Fatalf("HTTP %d: status=%d calls=%d, want exactly one attempt", status, resp.StatusCode, b.calls.Load())
+		}
+	}
+	// A net timeout is not a connection error either (the budget is spent).
+	b := &seqBackend{name: "only", errs: []error{&net.OpError{Op: "read", Err: context.DeadlineExceeded}, nil}}
+	ts := singleBackendServer(t, b, 3)
+	if resp := post(t, ts.URL, chatBody); resp.StatusCode == 200 || b.calls.Load() != 1 {
+		t.Fatalf("timeout: status=%d calls=%d", resp.StatusCode, b.calls.Load())
+	}
+}
+
+func TestSameBackendRetryStopsWhenClientLeaves(t *testing.T) {
+	b := &seqBackend{name: "only", errs: []error{connReset(), nil}}
+	s := New(router.NewPool([]router.Member{member(b, 10)}, router.Options{}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.SameBackendRetryDelay = 5 * time.Second // long pause; the request context ends first
+	s.RequestTimeout = 100 * time.Millisecond
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	start := time.Now()
+	resp := post(t, ts.URL, chatBody)
+	if resp.StatusCode == 200 || time.Since(start) > 2*time.Second || b.calls.Load() != 1 {
+		t.Fatalf("status=%d elapsed=%v calls=%d: the backoff must respect the request deadline", resp.StatusCode, time.Since(start), b.calls.Load())
 	}
 }

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,10 +117,104 @@ func TestClosedLoop(t *testing.T) {
 	if r.Latency.P50MS < 20 || r.RequestsPerSec <= 0 || r.TokensPerSec <= 0 {
 		t.Fatalf("metrics: %+v", r)
 	}
-	// Throughput is successful requests over wall time, not over the nominal duration.
+	// The legacy figure is successes over wall time, kept beside the steady-state one.
 	want := float64(r.Succeeded) / r.WallSeconds
-	if diff := r.RequestsPerSec - want; diff > 1e-9 || diff < -1e-9 {
-		t.Fatalf("req/s %.3f != succeeded/wall %.3f", r.RequestsPerSec, want)
+	if diff := r.WallRequestsPerSec - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("wall req/s %.3f != succeeded/wall %.3f", r.WallRequestsPerSec, want)
+	}
+	if r.ThroughputBasis != "steady" || r.DrainSeconds < 0 {
+		t.Fatalf("basis=%q drain=%v", r.ThroughputBasis, r.DrainSeconds)
+	}
+	// 4 clients at about 20ms each can do at most ~200 req/s; the steady figure must be in that region.
+	if r.RequestsPerSec < 50 || r.RequestsPerSec > 220 {
+		t.Fatalf("steady req/s %.1f is implausible for 4 clients at 20ms", r.RequestsPerSec)
+	}
+}
+
+func TestSteadyStateThroughputExcludesRampAndDrain(t *testing.T) {
+	start := time.Now()
+	at := func(sec float64) time.Time { return start.Add(time.Duration(sec * float64(time.Second))) }
+	ok := func(sec float64) Result {
+		return Result{CompletedAt: at(sec), Latency: time.Second, HasUsage: true, OutputTokens: 10}
+	}
+	// Window is 10s, so the steady interval is (2s, 10s]. Completions at 0.5s and 1.5s fall in the ramp-up
+	// and at 11s and 14s in the drain: all three must be excluded from throughput.
+	rs := []Result{ok(0.5), ok(1.5), ok(2.5), ok(5), ok(7.5), ok(10), ok(11), ok(14),
+		{Err: "http_503", CompletedAt: at(6)}} // a failure never counts
+	lr := aggregate(rs, LevelConfig{Concurrency: 4, Duration: 10 * time.Second}, start, 14*time.Second)
+
+	if lr.ThroughputBasis != "steady" || lr.RequestsPerSec != 4.0/8.0 {
+		t.Fatalf("steady req/s = %v (%s), want 4 completions / 8s = 0.5", lr.RequestsPerSec, lr.ThroughputBasis)
+	}
+	if lr.TokensPerSec != 40.0/8.0 {
+		t.Fatalf("steady tokens/s = %v, want 5", lr.TokensPerSec)
+	}
+	// Legacy wall figure counts all 8 successes over 14s.
+	if lr.WallRequestsPerSec != 8.0/14.0 || lr.DrainSeconds != 4 || lr.Succeeded != 8 || lr.Failed != 1 {
+		t.Fatalf("wall=%v drain=%v succeeded=%d failed=%d", lr.WallRequestsPerSec, lr.DrainSeconds, lr.Succeeded, lr.Failed)
+	}
+}
+
+func TestThroughputFallsBackToWallWhenNothingCompletesInWindow(t *testing.T) {
+	start := time.Now()
+	rs := []Result{{CompletedAt: start.Add(12 * time.Second), Latency: 12 * time.Second, HasUsage: true, OutputTokens: 5}}
+	lr := aggregate(rs, LevelConfig{Concurrency: 1, Duration: 10 * time.Second}, start, 12*time.Second)
+	if lr.ThroughputBasis != "wall" || lr.RequestsPerSec != lr.WallRequestsPerSec || lr.RequestsPerSec == 0 {
+		t.Fatalf("expected a flagged wall-clock fallback: %+v", lr)
+	}
+}
+
+// A saturated single-lane server with many waiting clients: the steady-state estimate must
+// recover the server's capacity (about 20 req/s), not be dragged down by the queue at the end.
+func TestSteadyThroughputUnderSaturation(t *testing.T) {
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock() // one request at a time, 50ms each => capacity 20 req/s
+		time.Sleep(50 * time.Millisecond)
+		mu.Unlock()
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":4}}`)
+	}))
+	defer ts.Close()
+	rq := requester(ts.URL, false)
+	rq.Client = NewClient(64)
+	r := RunLevel(context.Background(), rq, Single("hi"), LevelConfig{Concurrency: 40, Duration: 2 * time.Second})
+	if r.RequestsPerSec < 14 || r.RequestsPerSec > 24 {
+		t.Fatalf("steady req/s = %.1f, want about 20 (capacity); wall-clock figure %.1f, drain %.1fs", r.RequestsPerSec, r.WallRequestsPerSec, r.DrainSeconds)
+	}
+	if r.DrainSeconds < 0.5 {
+		t.Fatalf("expected a long drain with 40 clients queued behind one lane, got %.2fs", r.DrainSeconds)
+	}
+	if want := 4 * r.RequestsPerSec; r.TokensPerSec < want*0.99 || r.TokensPerSec > want*1.01 {
+		t.Fatalf("tokens/s %.1f should be 4 x req/s %.1f", r.TokensPerSec, r.RequestsPerSec)
+	}
+}
+
+func TestStreamUsageOption(t *testing.T) {
+	var sawOpts atomic.Bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		_, has := raw["stream_options"]
+		sawOpts.Store(has)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	rq := requester(ts.URL, true)
+	rq.StreamUsage = true
+	rq.Do(context.Background(), "x")
+	if !sawOpts.Load() {
+		t.Fatal("stream_options.include_usage must be sent for streaming requests by default")
+	}
+	rq.StreamUsage = false
+	rq.Do(context.Background(), "x")
+	if sawOpts.Load() {
+		t.Fatal("stream_options must not be sent when disabled")
+	}
+	rq.Stream, rq.StreamUsage = false, true
+	rq.Do(context.Background(), "x")
+	if sawOpts.Load() {
+		t.Fatal("stream_options is only meaningful when streaming and must not be sent otherwise")
 	}
 }
 
