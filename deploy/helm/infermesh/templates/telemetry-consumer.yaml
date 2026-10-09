@@ -1,0 +1,72 @@
+{{- $c := .Values.telemetryConsumer }}
+{{- if and $c.enabled (include "infermesh.kafkaBrokers" .) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "infermesh.fullname" . }}-telemetry-consumer
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry-consumer
+spec:
+  replicas: {{ $c.replicaCount }}
+  selector:
+    matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "telemetry-consumer") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "infermesh.selector" (dict "ctx" . "component" "telemetry-consumer") | nindent 8 }}
+      annotations:
+        {{- if .Values.monitoring.scrapeAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with $c.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "infermesh.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532   # distroless "nonroot"
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: consumer
+          image: {{ include "infermesh.image" (dict "image" $c.image "ctx" .) }}
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          env:
+            - {name: KAFKA_BROKERS, value: {{ include "infermesh.kafkaBrokers" . | quote }}}
+            - {name: KAFKA_TOPIC, value: {{ .Values.kafka.topic | quote }}}
+            - {name: KAFKA_GROUP, value: {{ $c.group | quote }}}
+            - {name: METRICS_ADDR, value: ":9100"}
+          ports:
+            - {name: metrics, containerPort: 9100}
+          readinessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{ toYaml $c.resources | nindent 12 }}
+          securityContext: {{- include "infermesh.containerSecurityContext" . | nindent 12 }}
+      {{- with $c.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "infermesh.fullname" . }}-telemetry-consumer
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry-consumer
+spec:
+  selector: {{- include "infermesh.selector" (dict "ctx" . "component" "telemetry-consumer") | nindent 4 }}
+  ports:
+    - {name: metrics, port: 9100, targetPort: metrics}
+{{- end }}

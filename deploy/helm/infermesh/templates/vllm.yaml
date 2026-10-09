@@ -1,0 +1,135 @@
+{{- $v := .Values.vllm }}
+{{- if $v.enabled }}
+{{- $secretName := ternary $v.existingSecret (printf "%s-vllm" (include "infermesh.fullname" .)) (ne $v.existingSecret "") }}
+{{- if and $v.hfToken (eq $v.existingSecret "") }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  HF_TOKEN: {{ $v.hfToken | quote }}
+---
+{{- end }}
+{{- if and $v.modelCache.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "infermesh.fullname" . }}-vllm-cache
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+spec:
+  accessModes: [{{ $v.modelCache.persistence.accessMode }}]
+  {{- with $v.modelCache.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests: {storage: {{ $v.modelCache.persistence.size }}}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "infermesh.fullname" . }}-vllm
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vllm
+spec:
+  replicas: {{ $v.replicaCount }}
+  selector:
+    matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "vllm") | nindent 6 }}
+  strategy:
+    type: Recreate   # a rolling update would need a second GPU; recreate frees it first
+  template:
+    metadata:
+      labels: {{- include "infermesh.selector" (dict "ctx" . "component" "vllm") | nindent 8 }}
+      annotations:
+        {{- if $.Values.monitoring.scrapeAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $v.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with $v.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "infermesh.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $v.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: vllm
+          image: {{ include "infermesh.image" (dict "image" $v.image "ctx" .) }}
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          args:
+            {{- if $v.args }}
+            {{- toYaml $v.args | nindent 12 }}
+            {{- else }}
+            - --model
+            - {{ $v.model | quote }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - {{ $v.port | quote }}
+            {{- end }}
+            {{- with $v.extraArgs }}{{ toYaml . | nindent 12 }}{{ end }}
+          {{- if or $v.env $v.hfToken $v.existingSecret }}
+          env:
+            {{- with $v.env }}{{ toYaml . | nindent 12 }}{{ end }}
+            {{- if or $v.hfToken $v.existingSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ $secretName }}, key: HF_TOKEN}
+            {{- end }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: {{ $v.port }}}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: {{ $v.startupProbe.periodSeconds }}
+            failureThreshold: {{ $v.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources: {{ toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - {name: shm, mountPath: /dev/shm}
+            - {name: cache, mountPath: /root/.cache/huggingface}
+      volumes:
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: {{ $v.shmSize }}}
+        - name: cache
+          {{- if $v.modelCache.persistence.enabled }}
+          persistentVolumeClaim: {claimName: {{ include "infermesh.fullname" . }}-vllm-cache}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with $v.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $v.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $v.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "infermesh.fullname" . }}-vllm
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vllm
+spec:
+  selector: {{- include "infermesh.selector" (dict "ctx" . "component" "vllm") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ $v.port }}, targetPort: http}
+{{- end }}

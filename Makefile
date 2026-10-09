@@ -54,3 +54,17 @@ down: ## stop the stack (keeps volumes)
 
 logs:
 	docker compose logs -f --tail=100
+
+# --- Helm / Kubernetes (see docs/kubernetes.md) ---
+CHART := deploy/helm/infermesh
+.PHONY: helm-lint helm-validate
+
+helm-lint: ## lint the chart with each values file
+	helm lint $(CHART)
+	helm lint $(CHART) -f $(CHART)/values-local.yaml
+	helm lint $(CHART) -f $(CHART)/values-gpu.yaml
+
+helm-validate: ## render the chart and validate it against Kubernetes schemas (needs kubeconform)
+	helm template rel $(CHART) | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0
+	helm template rel $(CHART) -f $(CHART)/values-local.yaml | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0
+	helm template rel $(CHART) -f $(CHART)/values-gpu.yaml | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0

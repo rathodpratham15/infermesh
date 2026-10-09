@@ -1,0 +1,23 @@
+# NVIDIA GPU cluster. Requires GPU nodes with the NVIDIA device plugin (or GPU Operator), which
+# advertises the nvidia.com/gpu resource. Cloud-specific node labels are deliberately not set here:
+# add a nodeSelector for your provider's GPU node pool in your own values file.
+#
+# NOT TESTED: this profile has only been rendered and schema-validated, never scheduled on a GPU.
+vllm:
+  enabled: true
+  replicaCount: 1
+  model: Qwen/Qwen2.5-0.5B-Instruct        # replace with the model you want to serve
+  maxConcurrent: 64
+  resources:
+    requests: {cpu: "4", memory: 16Gi}
+    limits: {memory: 32Gi, nvidia.com/gpu: 1}
+  tolerations:
+    - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  modelCache:
+    persistence: {enabled: true, size: 100Gi}
+gateway:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10

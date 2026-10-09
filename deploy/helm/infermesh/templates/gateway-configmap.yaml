@@ -1,0 +1,54 @@
+{{- $g := .Values.gateway }}
+{{- $backends := $g.backends }}
+{{- if not $backends }}
+  {{- if .Values.vllm.enabled }}
+    {{- $backends = list (dict "name" "vllm" "kind" "vllm" "url" (printf "http://%s-vllm:%d" (include "infermesh.fullname" .) (int .Values.vllm.port)) "model" .Values.vllm.model "timeout" .Values.vllm.timeout "weight" .Values.vllm.weight "maxConcurrent" .Values.vllm.maxConcurrent) }}
+  {{- else }}
+    {{- $backends = list (dict "name" "mock" "kind" "mock") }}
+  {{- end }}
+{{- end }}
+{{- $names := list }}
+{{- range $backends }}{{ $names = append $names .name }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "infermesh.fullname" . }}-gateway
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+data:
+  LISTEN_ADDR: ":{{ $g.service.port }}"
+  LOG_LEVEL: {{ $g.logLevel | quote }}
+  ROUTING_POLICY: {{ $g.routingPolicy | quote }}
+  MAX_RETRIES: {{ $g.maxRetries | quote }}
+  MAX_QUEUE: {{ $g.maxQueue | quote }}
+  REQUEST_TIMEOUT: {{ $g.requestTimeout | quote }}
+  HEALTH_INTERVAL: {{ $g.healthInterval | quote }}
+  BACKENDS: {{ join "," $names | quote }}
+  {{- range $backends }}
+  {{- $p := include "infermesh.backendPrefix" .name }}
+  {{ $p }}KIND: {{ .kind | default .name | quote }}
+  {{- if .url }}
+  {{ $p }}URL: {{ .url | quote }}
+  {{- end }}
+  {{- if .model }}
+  {{ $p }}MODEL: {{ .model | quote }}
+  {{- end }}
+  {{- if .timeout }}
+  {{ $p }}TIMEOUT: {{ .timeout | quote }}
+  {{- end }}
+  {{- if .weight }}
+  {{ $p }}WEIGHT: {{ .weight | quote }}
+  {{- end }}
+  {{- if .maxConcurrent }}
+  {{ $p }}MAX_CONCURRENT: {{ .maxConcurrent | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with $g.wsAllowedOrigins }}
+  WS_ALLOWED_ORIGINS: {{ . | quote }}
+  {{- end }}
+  {{- with $g.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- with (include "infermesh.kafkaBrokers" $) }}
+  KAFKA_BROKERS: {{ . | quote }}
+  KAFKA_TOPIC: {{ $.Values.kafka.topic | quote }}
+  {{- end }}

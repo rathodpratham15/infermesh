@@ -1,0 +1,72 @@
+{{- $g := .Values.gateway }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "infermesh.fullname" . }}-gateway
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not $g.autoscaling.enabled }}
+  replicas: {{ $g.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "gateway") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata:
+      labels: {{- include "infermesh.selector" (dict "ctx" . "component" "gateway") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/gateway-configmap.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.scrapeAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $g.service.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with $g.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "infermesh.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532   # distroless "nonroot"
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      # Finish in-flight requests on scale-down/rollout; the gateway handles SIGTERM gracefully.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: {{ include "infermesh.image" (dict "image" $g.image "ctx" .) }}
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "infermesh.fullname" . }}-gateway}
+          {{- with $g.extraEnv }}
+          env: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: {{ $g.service.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources: {{ toYaml $g.resources | nindent 12 }}
+          securityContext: {{- include "infermesh.containerSecurityContext" . | nindent 12 }}
+      {{- with $g.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}

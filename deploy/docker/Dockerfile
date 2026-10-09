@@ -29,5 +29,6 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # Static binary, no shell, no package manager, non-root user.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
-USER nonroot:nonroot
+# Numeric, so Kubernetes can verify runAsNonRoot (it cannot resolve the name "nonroot").
+USER 65532:65532
 ENTRYPOINT ["/app"]

@@ -1,0 +1,107 @@
+{{- $k := .Values.kafka }}
+{{- if $k.enabled }}
+{{- $fn := include "infermesh.fullname" . }}
+{{- $headless := printf "%s-kafka-headless" $fn }}
+{{- $pod := printf "%s-kafka-0.%s.%s.svc.cluster.local" $fn $headless .Release.Namespace }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $headless }}
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true   # brokers must resolve each other before they are Ready
+  selector: {{- include "infermesh.selector" (dict "ctx" . "component" "kafka") | nindent 4 }}
+  ports:
+    - {name: broker, port: 9092}
+    - {name: controller, port: 9093}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fn }}-kafka
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  selector: {{- include "infermesh.selector" (dict "ctx" . "component" "kafka") | nindent 4 }}
+  ports:
+    - {name: broker, port: 9092, targetPort: broker}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fn }}-kafka
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka
+spec:
+  replicas: 1   # single-node KRaft: this chart's Kafka is for telemetry and demos only
+  serviceName: {{ $headless }}
+  selector:
+    matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "kafka") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "infermesh.selector" (dict "ctx" . "component" "kafka") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "infermesh.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: kafka
+          image: {{ $k.image.repository }}:{{ $k.image.tag }}
+          imagePullPolicy: {{ $k.image.pullPolicy }}
+          env:
+            - {name: KAFKA_NODE_ID, value: "1"}
+            - {name: KAFKA_PROCESS_ROLES, value: "broker,controller"}
+            - {name: KAFKA_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093"}
+            - {name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://{{ $pod }}:9092"}
+            - {name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"}
+            - {name: KAFKA_INTER_BROKER_LISTENER_NAME, value: "PLAINTEXT"}
+            - {name: KAFKA_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER"}
+            - {name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@{{ $pod }}:9093"}
+            - {name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1"}
+            - {name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0"}
+            - {name: KAFKA_LOG_RETENTION_HOURS, value: "24"}
+          ports:
+            - {name: broker, containerPort: 9092}
+            - {name: controller, containerPort: 9093}
+          readinessProbe:
+            tcpSocket: {port: broker}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: broker}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources: {{ toYaml $k.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/kafka/data}
+      {{- with $k.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $k.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if not $k.persistence.enabled }}
+      volumes:
+        - {name: data, emptyDir: {}}
+      {{- end }}
+  {{- if $k.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $k.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests: {storage: {{ $k.persistence.size }}}
+  {{- end }}
+{{- end }}
