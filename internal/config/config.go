@@ -31,6 +31,10 @@ type Backend struct {
 	Timeout       time.Duration
 	Weight        int
 	MaxConcurrent int
+	// StreamUsage asks the engine for token usage in streamed responses.
+	// Default: true for vllm, false for triton (not documented for its
+	// TensorRT-LLM path; enable only after confirming your Triton accepts it).
+	StreamUsage bool
 }
 
 type Config struct {
@@ -66,7 +70,7 @@ func Load() (Config, error) { return LoadFrom(os.Getenv) }
 //	WS_ALLOWED_ORIGINS    comma list of browser origins allowed on the WebSocket
 //	BACKENDS              comma list of names, default "mock"
 //	BACKEND_<NAME>_KIND   mock|vllm|triton (default: the name itself)
-//	BACKEND_<NAME>_URL / _MODEL / _TIMEOUT / _WEIGHT / _MAX_CONCURRENT
+//	BACKEND_<NAME>_URL / _MODEL / _TIMEOUT / _WEIGHT / _MAX_CONCURRENT / _STREAM_USAGE
 func LoadFrom(get func(string) string) (Config, error) {
 	c := Config{
 		ListenAddr:      or(get("LISTEN_ADDR"), ":8080"),
@@ -134,6 +138,12 @@ func LoadFrom(get func(string) string) (Config, error) {
 		if v := get(p + "TIMEOUT"); v != "" {
 			if b.Timeout, err = time.ParseDuration(v); err != nil {
 				return c, fmt.Errorf("%sTIMEOUT: %w", p, err)
+			}
+		}
+		b.StreamUsage = b.Kind != "triton"
+		if v := get(p + "STREAM_USAGE"); v != "" {
+			if b.StreamUsage, err = strconv.ParseBool(v); err != nil {
+				return c, fmt.Errorf("%sSTREAM_USAGE: %w", p, err)
 			}
 		}
 		if b.Weight, err = intEnv(get, p+"WEIGHT", b.Weight); err != nil {

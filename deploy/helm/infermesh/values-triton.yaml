@@ -1,0 +1,20 @@
+# Triton + TensorRT-LLM only (no vLLM), for the backend comparison: run this and values-gpu.yaml on the
+# same hardware and model, one at a time, so the gateway routes to a single engine.
+# Requires NVIDIA GPU nodes. NOT TESTED on a GPU: rendered and schema-validated only.
+#
+# Required: --set triton.image.tag=<your build tag> --set triton.model=<model name in the repository>
+triton:
+  enabled: true
+  importModel: ""            # or mount a prepared repository (modelRepository.persistence)
+  maxConcurrent: 64
+  resources:
+    requests: {cpu: "4", memory: 32Gi}
+    limits: {memory: 64Gi, nvidia.com/gpu: 1}
+  tolerations:
+    - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  modelRepository:
+    persistence: {enabled: true, size: 100Gi}
+  engineCache:
+    persistence: {enabled: true, size: 100Gi}
+gateway:
+  replicaCount: 2

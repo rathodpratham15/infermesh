@@ -2,8 +2,12 @@
 {{- $backends := $g.backends }}
 {{- if not $backends }}
   {{- if .Values.vllm.enabled }}
-    {{- $backends = list (dict "name" "vllm" "kind" "vllm" "url" (printf "http://%s-vllm:%d" (include "infermesh.fullname" .) (int .Values.vllm.port)) "model" .Values.vllm.model "timeout" .Values.vllm.timeout "weight" .Values.vllm.weight "maxConcurrent" .Values.vllm.maxConcurrent) }}
-  {{- else }}
+    {{- $backends = append $backends (dict "name" "vllm" "kind" "vllm" "url" (printf "http://%s-vllm:%d" (include "infermesh.fullname" .) (int .Values.vllm.port)) "model" .Values.vllm.model "timeout" .Values.vllm.timeout "weight" .Values.vllm.weight "maxConcurrent" .Values.vllm.maxConcurrent) }}
+  {{- end }}
+  {{- if .Values.triton.enabled }}
+    {{- $backends = append $backends (dict "name" "triton" "kind" "triton" "url" (printf "http://%s-triton:%d" (include "infermesh.fullname" .) (int .Values.triton.port)) "model" .Values.triton.model "timeout" .Values.triton.timeout "weight" .Values.triton.weight "maxConcurrent" .Values.triton.maxConcurrent "streamUsage" .Values.triton.streamUsage) }}
+  {{- end }}
+  {{- if not $backends }}
     {{- $backends = list (dict "name" "mock" "kind" "mock") }}
   {{- end }}
 {{- end }}
@@ -40,6 +44,9 @@ data:
   {{- end }}
   {{- if .maxConcurrent }}
   {{ $p }}MAX_CONCURRENT: {{ .maxConcurrent | quote }}
+  {{- end }}
+  {{- if hasKey . "streamUsage" }}
+  {{ $p }}STREAM_USAGE: {{ .streamUsage | quote }}
   {{- end }}
   {{- end }}
   {{- with $g.wsAllowedOrigins }}

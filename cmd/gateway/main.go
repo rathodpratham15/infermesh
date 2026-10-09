@@ -147,7 +147,10 @@ func newLogger(level string) *slog.Logger {
 // Triton) are registered in later phases.
 var factories = map[string]func(config.Backend) (backend.InferenceBackend, error){
 	"vllm": func(bc config.Backend) (backend.InferenceBackend, error) {
-		return backend.NewVLLM(bc.Name, bc.URL, bc.Model, bc.Timeout), nil
+		return backend.NewVLLM(bc.Name, bc.URL, bc.Model, bc.Timeout).WithStreamUsage(bc.StreamUsage), nil
+	},
+	"triton": func(bc config.Backend) (backend.InferenceBackend, error) {
+		return backend.NewTriton(bc.Name, bc.URL, bc.Model, bc.Timeout, bc.StreamUsage), nil
 	},
 	"mock": func(bc config.Backend) (backend.InferenceBackend, error) {
 		return backend.NewMock(bc.Name, 20*time.Millisecond), nil
