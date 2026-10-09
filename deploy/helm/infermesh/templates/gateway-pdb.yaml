@@ -1,0 +1,11 @@
+{{- if .Values.gateway.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "infermesh.fullname" . }}-gateway
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.gateway.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "infermesh.selector" (dict "ctx" . "component" "gateway") | nindent 6 }}
+{{- end }}

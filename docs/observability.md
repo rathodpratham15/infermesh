@@ -46,7 +46,7 @@ honoured, and trace context is forwarded to the backend. Failed attempts record 
 
 ## Dashboard
 
-`deploy/grafana/dashboards/infermesh.json` has panels for throughput, p50/p95/p99 latency,
+`deploy/helm/infermesh/dashboards/infermesh.json` (the single source: Compose mounts it and the Helm chart ships it as a ConfigMap) has panels for throughput, p50/p95/p99 latency,
 TTFT, tokens/s, active requests and queue depth, backend distribution, error rate, backend
 health and Kubernetes pod count. The pod-count panel needs kube-state-metrics and is empty
 outside Kubernetes. Provisioning files and a Prometheus scrape config are under

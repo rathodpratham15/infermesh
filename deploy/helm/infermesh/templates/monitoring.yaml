@@ -1,0 +1,35 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "infermesh.fullname" . }}
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [gateway, telemetry-consumer{{ if .Values.triton.enabled }}, triton{{ end }}]
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}
+{{- if .Values.monitoring.dashboard.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "infermesh.fullname" . }}-dashboard
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.dashboard.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+data:
+  infermesh.json: |-
+{{ .Files.Get "dashboards/infermesh.json" | indent 4 }}
+{{- end }}

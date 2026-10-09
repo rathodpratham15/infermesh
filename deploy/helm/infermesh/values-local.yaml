@@ -1,0 +1,16 @@
+# Local cluster (kind, minikube, Docker Desktop): no GPU, no cloud assumptions, small footprint.
+# Images are built locally (make images) and loaded into the cluster (kind load docker-image ...).
+gateway:
+  replicaCount: 1
+  image: {pullPolicy: IfNotPresent, tag: dev}
+  logLevel: debug
+  resources:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  podDisruptionBudget: {enabled: false}
+telemetryConsumer:
+  image: {pullPolicy: IfNotPresent, tag: dev}
+kafka:
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 1Gi}

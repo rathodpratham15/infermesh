@@ -1,0 +1,29 @@
+{{- $a := .Values.gateway.autoscaling }}
+{{- if $a.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "infermesh.fullname" . }}-gateway
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "infermesh.fullname" . }}-gateway
+  minReplicas: {{ $a.minReplicas }}
+  maxReplicas: {{ $a.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ $a.targetCPUUtilizationPercentage }}}
+    {{- if $a.activeRequests.enabled }}
+    - type: Pods
+      pods:
+        metric: {name: infermesh_requests_active}
+        target: {type: AverageValue, averageValue: {{ $a.activeRequests.averageValue | quote }}}
+    {{- end }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120
+{{- end }}

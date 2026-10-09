@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "infermesh.fullname" . }}-gateway
+  labels: {{- include "infermesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  selector: {{- include "infermesh.selector" (dict "ctx" . "component" "gateway") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.gateway.service.port }}, targetPort: http}

@@ -1,0 +1,18 @@
+InferMesh {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}".
+
+Gateway:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "infermesh.fullname" . }}-gateway 8080:{{ .Values.gateway.service.port }}
+          curl localhost:8080/readyz
+{{- if not (or .Values.vllm.enabled .Values.gateway.backends) }}
+
+NOTE: no engine is configured, so the gateway is using the built-in MOCK backend. Enable vllm
+(values-gpu.yaml, NVIDIA GPU required) or set gateway.backends to serve a real model.
+{{- end }}
+{{- if .Values.vllm.enabled }}
+
+vLLM is enabled. The first start downloads the model, which can take minutes; watch with:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/component=vllm -w
+{{- end }}
+{{- if .Values.triton.enabled }}
+
+Triton is deployed but not yet wired into the gateway's backend list (see docs/kubernetes.md).
+{{- end }}
