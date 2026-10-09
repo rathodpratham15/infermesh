@@ -1,0 +1,75 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T04:04:52.225833Z",
+  "finished_at": "2026-10-09T04:07:17.762433Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "gateway-overhead check: direct",
+    "target": "http://localhost:8000",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    }
+  },
+  "config": {
+    "concurrency": [
+      1,
+      4
+    ],
+    "duration": "1m0s",
+    "warmup": "10s",
+    "stream": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 60.779202042,
+      "requests": 31,
+      "succeeded": 31,
+      "failed": 0,
+      "requests_per_sec": 0.510042892280458,
+      "input_tokens": 1138,
+      "output_tokens": 3830,
+      "output_tokens_per_sec": 63.01497669142433,
+      "latency": {
+        "count": 31,
+        "mean_ms": 1960.4543332258063,
+        "min_ms": 861.019125,
+        "max_ms": 5142.289833,
+        "p50_ms": 1583.017042,
+        "p95_ms": 4123.310083,
+        "p99_ms": 5142.289833
+      }
+    },
+    {
+      "concurrency": 4,
+      "wall_seconds": 61.875977959,
+      "requests": 86,
+      "succeeded": 86,
+      "failed": 0,
+      "requests_per_sec": 1.389877022339509,
+      "input_tokens": 3185,
+      "output_tokens": 10137,
+      "output_tokens_per_sec": 163.8277136680884,
+      "latency": {
+        "count": 86,
+        "mean_ms": 2862.256830953488,
+        "min_ms": 132.002042,
+        "max_ms": 8383.998791,
+        "p50_ms": 2964.583375,
+        "p95_ms": 5815.115791,
+        "p99_ms": 8383.998791
+      }
+    }
+  ]
+}

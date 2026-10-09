@@ -1,0 +1,4 @@
+{"time":"2026-10-08T23:47:36.747907-04:00","level":"ERROR","msg":"generate failed","request_id":"req-464048f0b20f58ff","err":"Post \"http://127.0.0.1:8000/v1/chat/completions\": dial tcp 127.0.0.1:8000: connect: connection reset by peer"}
+{"time":"2026-10-08T23:48:56.464754-04:00","level":"ERROR","msg":"generate failed","request_id":"req-b38bf14f58650137","err":"Post \"http://127.0.0.1:8000/v1/chat/completions\": dial tcp 127.0.0.1:8000: connect: connection reset by peer"}
+{"time":"2026-10-08T23:50:06.120473-04:00","level":"ERROR","msg":"generate failed","request_id":"req-020d622f85439c86","err":"Post \"http://127.0.0.1:8000/v1/chat/completions\": dial tcp 127.0.0.1:8000: connect: connection reset by peer"}
+{"time":"2026-10-08T23:58:13.529988-04:00","level":"ERROR","msg":"stream failed","request_id":"req-864519b1f744a785","err":"Post \"http://127.0.0.1:8000/v1/chat/completions\": dial tcp 127.0.0.1:8000: connect: connection reset by peer"}

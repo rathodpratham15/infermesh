@@ -1,0 +1,75 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T04:20:16.701821Z",
+  "finished_at": "2026-10-09T04:21:06.023512Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "paired overhead run: pair 5, direct (order: direct gateway)",
+    "target": "http://localhost:8000",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    }
+  },
+  "config": {
+    "concurrency": [
+      1,
+      4
+    ],
+    "duration": "20s",
+    "warmup": "3s",
+    "stream": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 20.716755208,
+      "requests": 19,
+      "succeeded": 19,
+      "failed": 0,
+      "requests_per_sec": 0.9171320416366625,
+      "input_tokens": 704,
+      "output_tokens": 2210,
+      "output_tokens_per_sec": 106.67693747458021,
+      "latency": {
+        "count": 19,
+        "mean_ms": 1090.3344563157896,
+        "min_ms": 360.880792,
+        "max_ms": 1461.879417,
+        "p50_ms": 1179.522,
+        "p95_ms": 1461.879417,
+        "p99_ms": 1461.879417
+      }
+    },
+    {
+      "concurrency": 4,
+      "wall_seconds": 21.307633875,
+      "requests": 44,
+      "succeeded": 44,
+      "failed": 0,
+      "requests_per_sec": 2.064987612332906,
+      "input_tokens": 1625,
+      "output_tokens": 5207,
+      "output_tokens_per_sec": 244.37251130494187,
+      "latency": {
+        "count": 44,
+        "mean_ms": 1882.5577537727272,
+        "min_ms": 199.942042,
+        "max_ms": 3254.748458,
+        "p50_ms": 2007.94,
+        "p95_ms": 2810.42475,
+        "p99_ms": 3254.748458
+      }
+    }
+  ]
+}

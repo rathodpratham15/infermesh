@@ -4,6 +4,7 @@
   results_to_md.py table  report.json [...]        one table per report
   results_to_md.py repeat report1.json report2.json [...]   run-to-run variance of the same scenario
   results_to_md.py overhead direct.json gateway.json        gateway overhead (same load, with/without gateway)
+  results_to_md.py pairs DIR                                 paired overhead runs (overhead-pairN-direct/gateway.json)
 """
 import json
 import statistics
@@ -67,6 +68,34 @@ def overhead(direct, gateway):
     return md(["conc", "metric", "direct to engine", "via gateway", "difference", "relative"], rows)
 
 
+def pairs(directory):
+    import glob
+    import os
+    idx = sorted({int(os.path.basename(p).split("pair")[1].split("-")[0]) for p in glob.glob(os.path.join(directory, "overhead-pair*-direct.json"))})
+    per_conc = {}
+    for i in idx:
+        d = load(os.path.join(directory, f"overhead-pair{i}-direct.json"))
+        g = load(os.path.join(directory, f"overhead-pair{i}-gateway.json"))
+        for a, b in zip(d["levels"], g["levels"]):
+            per_conc.setdefault(a["concurrency"], []).append((i, a, b))
+    out = []
+    for conc, rows in sorted(per_conc.items()):
+        out.append(f"**concurrency {conc}**: per-pair results (direct to engine vs via gateway)\n")
+        body, dp50, drps, dtok = [], [], [], []
+        for i, a, b in rows:
+            d50 = b["latency"]["p50_ms"] - a["latency"]["p50_ms"]
+            drate = b["requests_per_sec"] / a["requests_per_sec"] - 1 if a["requests_per_sec"] else 0
+            dp50.append(d50)
+            drps.append(drate * 100)
+            body.append([i, f(a["latency"]["p50_ms"]), f(b["latency"]["p50_ms"]), f"{d50:+.0f}",
+                         f(a["requests_per_sec"], 2), f(b["requests_per_sec"], 2), f"{drate * 100:+.1f}%",
+                         a["failed"] + b["failed"]])
+        out.append(md(["pair", "direct p50 ms", "gateway p50 ms", "p50 diff ms", "direct req/s", "gateway req/s", "req/s diff", "failed"], body))
+        out.append(f"\np50 difference (gateway - direct): median {statistics.median(dp50):+.0f} ms, min {min(dp50):+.0f}, max {max(dp50):+.0f} over {len(rows)} pairs; "
+                   f"req/s difference: median {statistics.median(drps):+.1f}%, min {min(drps):+.1f}%, max {max(drps):+.1f}%\n")
+    return "\n".join(out)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -76,6 +105,8 @@ if __name__ == "__main__":
             print(f"**{p.split('/')[-1]}**\n\n{table(load(p))}\n")
     elif mode == "repeat":
         print(repeat(args))
+    elif mode == "pairs":
+        print(pairs(args[0]))
     elif mode == "overhead":
         print(overhead(load(args[0]), load(args[1])))
     else:

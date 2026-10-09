@@ -1,0 +1,111 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T04:18:37.280701Z",
+  "finished_at": "2026-10-09T04:19:26.535423Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "paired overhead run: pair 4, gateway (order: gateway direct)",
+    "target": "http://localhost:18090",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    },
+    "gateway_backends_before": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 253,
+          "failures": 0,
+          "latency_ewma_ms": 2645.276782
+        }
+      ],
+      "queue_depth": 0
+    },
+    "gateway_backends_after": {
+      "backends": [
+        {
+          "name": "vllm",
+          "healthy": true,
+          "active": 0,
+          "max_concurrent": 6,
+          "weight": 1,
+          "completed": 323,
+          "failures": 0,
+          "latency_ewma_ms": 2757.453282
+        }
+      ],
+      "queue_depth": 0
+    }
+  },
+  "config": {
+    "concurrency": [
+      1,
+      4
+    ],
+    "duration": "20s",
+    "warmup": "3s",
+    "stream": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 20.495138375,
+      "requests": 18,
+      "succeeded": 18,
+      "failed": 0,
+      "requests_per_sec": 0.8782570612919807,
+      "input_tokens": 662,
+      "output_tokens": 2082,
+      "output_tokens_per_sec": 101.58506675610576,
+      "latency": {
+        "count": 18,
+        "mean_ms": 1138.5972454444445,
+        "min_ms": 383.463209,
+        "max_ms": 1395.729584,
+        "p50_ms": 1222.126708,
+        "p95_ms": 1395.729584,
+        "p99_ms": 1395.729584
+      },
+      "backends": {
+        "vllm": 18
+      }
+    },
+    {
+      "concurrency": 4,
+      "wall_seconds": 20.642687958,
+      "requests": 39,
+      "succeeded": 39,
+      "failed": 0,
+      "requests_per_sec": 1.8892888406466315,
+      "input_tokens": 1444,
+      "output_tokens": 4564,
+      "output_tokens_per_sec": 221.0952376592622,
+      "latency": {
+        "count": 39,
+        "mean_ms": 2102.9087083846152,
+        "min_ms": 174.001334,
+        "max_ms": 3381.335708,
+        "p50_ms": 1785.155417,
+        "p95_ms": 3381.328916,
+        "p99_ms": 3381.335708
+      },
+      "backends": {
+        "vllm": 39
+      }
+    }
+  ]
+}

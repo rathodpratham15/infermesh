@@ -6,6 +6,7 @@
 #
 #   benchmarks/run_local.sh                     # full suite, 60s per level (about 25 minutes)
 #   DURATION=5s WARMUP=1s benchmarks/run_local.sh   # quick smoke test
+#   SUITE=overhead DURATION=20s WARMUP=3s benchmarks/run_local.sh   # paired gateway-overhead runs
 #
 # Environment overrides: OUT, DURATION, WARMUP, MODEL, MLX_PY (python with mlx-lm installed).
 # For meaningful numbers: plug in the charger and close other heavy applications first.
@@ -75,6 +76,24 @@ run() { # name target [extra flags...]
   echo; echo "=== $name"
   "$BIN/inferbench" "${common[@]}" --target "$target" --output "$OUT/$name.json" "$@" 2>/dev/null
 }
+
+# SUITE=overhead: gateway overhead measured with PAIRED, ALTERNATING runs. Throughput on a laptop drifts by
+# tens of percent over half an hour, so a single direct-vs-gateway pair cannot resolve a small difference.
+# Alternating direct and gateway runs (and swapping which goes first on every other pair) lets slow drift
+# cancel out; the per-pair differences are then summarized by results_to_md.py.
+if [ "${SUITE:-main}" = overhead ]; then
+  PAIRS="${PAIRS:-5}"
+  for i in $(seq 1 "$PAIRS"); do
+    if [ $((i % 2)) -eq 1 ]; then order=(direct gateway); else order=(gateway direct); fi
+    for t in "${order[@]}"; do
+      target="$GW"; [ "$t" = direct ] && target="$ENGINE"
+      run "overhead-pair$i-$t" "$target" --concurrency 1,4 --dataset benchmarks/datasets/short.jsonl --max-tokens 128 \
+        --notes "paired overhead run: pair $i, $t (order: ${order[*]})"
+    done
+  done
+  echo; echo "done. results in $OUT"
+  exit 0
+fi
 
 # A is repeated three times to show run-to-run variance.
 for i in 1 2 3; do run "a-low-concurrency-run$i" "$GW" --scenario benchmarks/scenarios/a-low-concurrency.json --notes "repeat $i of 3"; done
