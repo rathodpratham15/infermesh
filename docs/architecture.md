@@ -45,7 +45,9 @@ Kubernetes. Only the engine behind the gateway changes. NVIDIA-specific componen
    cancellations and 4xx are never retried.
 6. **Record**: metrics, a span per attempt, and a Kafka event (off the critical path).
 
-Backend health is polled in the background and cached; routing never makes a network call to choose a backend.
+Backend health is polled in the background (`HEALTH_INTERVAL`) and cached; routing never makes a network call to choose a
+backend, and `/readyz` reports that same cached state (with the last probe error), so "ready" always means "routing can serve a
+request". After a backend goes down or recovers, readiness and routing both update at the next refresh, up to `HEALTH_INTERVAL` later.
 
 ## Endpoints
 
