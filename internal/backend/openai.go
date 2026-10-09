@@ -55,6 +55,9 @@ func newOpenAIBackend(name, baseURL, model string, timeout time.Duration, health
 
 func (v *openAIBackend) Name() string { return v.name }
 
+// Model is the configured upstream model, or "" if the request's model is passed through.
+func (v *openAIBackend) Model() string { return v.model }
+
 // Health probes the engine's readiness endpoint with a short timeout.
 func (v *openAIBackend) Health(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, minDuration(v.timeout, 5*time.Second))

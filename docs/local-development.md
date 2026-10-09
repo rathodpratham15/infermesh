@@ -126,6 +126,23 @@ client. Timeouts, cancellations and 4xx responses are not retried.
 `GET /v1/backends` shows per-backend active/completed/failure counts, latency EWMA and health,
 plus the current queue depth.
 
+## Browser clients (UI)
+
+A browser UI on another origin needs three things from the gateway:
+
+- **CORS** for the HTTP API: set `CORS_ALLOWED_ORIGINS` (for example `http://localhost:5173`). Off by default. The gateway
+  exposes `X-Request-ID`, `X-InferMesh-Backend` and `Retry-After` to the page, and answers preflights. `*` allows any
+  origin; the gateway has no credentials or cookies, but prefer an explicit list outside local development. Alternatively
+  serve the UI and the API from one origin (for example a Vite dev-server proxy) and leave CORS off.
+- **WebSocket origin**: `WS_ALLOWED_ORIGINS` (a host pattern such as `localhost:5173`). This is separate from CORS.
+- **Choosing a backend and model**: `GET /v1/models` lists the models with a fixed configured model, with the backend serving
+  each (OpenAI list format; backends that pass the request's model through are not listed). A request can be **pinned** to
+  one backend with the `X-InferMesh-Pin-Backend: <name>` header, or `?backend=<name>` (for WebSocket, which cannot set
+  headers). Pinning is strict: if the pinned backend is unhealthy the request fails with `503`, and a retry never moves to a
+  different backend. An unknown name returns `400` listing the available backends. Disable pinning with
+  `ALLOW_BACKEND_PIN=false` (then a pinned request gets `403`). Pinning bypasses the routing policy but not the
+  per-backend concurrency limit or queue. The gateway has no authentication, so anyone who can reach it can pin.
+
 ## Configuration
 
 | Variable | Meaning | Default |
@@ -140,7 +157,9 @@ plus the current queue depth.
 | `MAX_RETRIES` / `MAX_QUEUE` | retries on another backend / requests allowed to wait | `1` / `128` |
 | `REQUEST_TIMEOUT` / `HEALTH_INTERVAL` | whole-request budget / health probe period | `2m` / `5s` |
 | `KAFKA_BROKERS` / `KAFKA_TOPIC` | telemetry events to Kafka (see `telemetry-events.md`) | disabled / `infermesh.inference.events` |
-| `WS_ALLOWED_ORIGINS` | browser origins allowed on the WebSocket | none (same-origin only) |
+| `WS_ALLOWED_ORIGINS` | browser origins allowed on the WebSocket (host patterns, e.g. `localhost:5173`) | none (same-origin only) |
+| `CORS_ALLOWED_ORIGINS` | exact origins (e.g. `http://localhost:5173`) or `*` allowed to call the HTTP API from a browser | none (no CORS headers) |
+| `ALLOW_BACKEND_PIN` | let clients pin a request to one backend | `true` |
 | `LISTEN_ADDR`, `SHUTDOWN_TIMEOUT`, `LOG_LEVEL` | gateway process | `:8080`, `15s`, `info` |
 
 ## Tests

@@ -51,6 +51,13 @@ type InferenceBackend interface {
 	Stream(ctx context.Context, req Request) (<-chan Token, error)
 }
 
+// Modeled is implemented by backends that serve a fixed, configured model. It
+// backs GET /v1/models; backends that pass the request's model through do not
+// implement it (or return "").
+type Modeled interface {
+	Model() string
+}
+
 // IsConnectionError reports whether err is a transport-level failure (connection
 // refused or reset, truncated response) as opposed to an HTTP error response or a
 // timeout. These are often transient, so a retry on the same backend can succeed;

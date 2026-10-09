@@ -4,6 +4,8 @@ gateway:
   replicaCount: 1
   image: {pullPolicy: IfNotPresent, tag: dev}
   logLevel: debug
+  corsAllowedOrigins: "http://localhost:5173"   # the Vite dev server
+  wsAllowedOrigins: "localhost:5173"
   resources:
     requests: {cpu: 50m, memory: 32Mi}
     limits: {memory: 128Mi}

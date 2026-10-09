@@ -42,6 +42,8 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	LogLevel        string
 	AllowedOrigins  []string // WebSocket origin patterns, e.g. localhost:5173
+	CORSOrigins     []string // browser origins allowed to call the HTTP API ("*" for any); empty disables CORS
+	AllowBackendPin bool     // let clients pin a request to one backend
 	RoutingPolicy   string
 	MaxRetries      int           // extra attempts on another backend
 	MaxQueue        int           // requests allowed to wait for capacity
@@ -67,7 +69,9 @@ func Load() (Config, error) { return LoadFrom(os.Getenv) }
 //	HEALTH_INTERVAL       backend health probe period, default 5s
 //	KAFKA_BROKERS         comma list; empty disables telemetry events
 //	KAFKA_TOPIC           default infermesh.inference.events
-//	WS_ALLOWED_ORIGINS    comma list of browser origins allowed on the WebSocket
+//	WS_ALLOWED_ORIGINS    comma list of browser origins allowed on the WebSocket (host patterns, e.g. localhost:5173)
+//	CORS_ALLOWED_ORIGINS  comma list of exact origins (http://localhost:5173) or "*" allowed to call the HTTP API; empty = no CORS
+//	ALLOW_BACKEND_PIN     true|false: let clients pin a request to one backend, default true
 //	BACKENDS              comma list of names, default "mock"
 //	BACKEND_<NAME>_KIND   mock|vllm|triton (default: the name itself)
 //	BACKEND_<NAME>_URL / _MODEL / _TIMEOUT / _WEIGHT / _MAX_CONCURRENT / _STREAM_USAGE
@@ -79,6 +83,7 @@ func LoadFrom(get func(string) string) (Config, error) {
 		RoutingPolicy:   or(get("ROUTING_POLICY"), "round_robin"),
 		MaxRetries:      1,
 		MaxQueue:        128,
+		AllowBackendPin: true,
 		RequestTimeout:  2 * time.Minute,
 		HealthInterval:  5 * time.Second,
 		KafkaTopic:      or(get("KAFKA_TOPIC"), DefaultKafkaTopic),
@@ -90,6 +95,13 @@ func LoadFrom(get func(string) string) (Config, error) {
 		return c, fmt.Errorf("ROUTING_POLICY: unknown policy %q", c.RoutingPolicy)
 	}
 	c.AllowedOrigins = SplitList(get("WS_ALLOWED_ORIGINS"))
+	c.CORSOrigins = SplitList(get("CORS_ALLOWED_ORIGINS"))
+	if v := get("ALLOW_BACKEND_PIN"); v != "" {
+		var perr error
+		if c.AllowBackendPin, perr = strconv.ParseBool(v); perr != nil {
+			return c, fmt.Errorf("ALLOW_BACKEND_PIN: %w", perr)
+		}
+	}
 	var err error
 	if v := get("SHUTDOWN_TIMEOUT"); v != "" {
 		if c.ShutdownTimeout, err = time.ParseDuration(v); err != nil {

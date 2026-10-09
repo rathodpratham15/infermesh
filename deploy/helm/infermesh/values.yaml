@@ -26,7 +26,9 @@ gateway:
   requestTimeout: 2m
   healthInterval: 5s
   logLevel: info
-  wsAllowedOrigins: ""               # comma-separated browser origins for the WebSocket
+  wsAllowedOrigins: ""               # comma-separated browser origins for the WebSocket (host patterns, e.g. ui.example.com)
+  corsAllowedOrigins: ""             # comma-separated exact origins (https://ui.example.com) allowed to call the HTTP API; "" = no CORS
+  allowBackendPin: true              # let clients pin a request to one backend (X-InferMesh-Pin-Backend)
   otlpEndpoint: ""                   # e.g. http://otel-collector:4318 to export traces
   extraEnv: []
   service:

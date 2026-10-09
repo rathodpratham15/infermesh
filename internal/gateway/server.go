@@ -43,6 +43,13 @@ type Server struct {
 	SameBackendRetryDelay time.Duration
 	// Metrics receives request-level measurements. New installs a no-op.
 	Metrics *metrics.Metrics
+	// CORSAllowedOrigins enables CORS for browser clients on other origins (exact
+	// origins, or "*"). Empty means no CORS headers are sent.
+	CORSAllowedOrigins []string
+	// AllowBackendPin lets a client pin a request to one backend with the
+	// X-InferMesh-Pin-Backend header (or ?backend=). New enables it; the gateway has
+	// no authentication, so anyone who can reach it can pin.
+	AllowBackendPin bool
 	// Events receives asynchronous telemetry events (Kafka). It is never on the
 	// request's critical path. New installs a no-op.
 	Events events.Publisher
@@ -52,7 +59,7 @@ type Server struct {
 func tracer() trace.Tracer { return otel.Tracer("github.com/rathodpratham15/infermesh/gateway") }
 
 func New(r router.Router, log *slog.Logger) *Server {
-	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, SameBackendRetryDelay: 50 * time.Millisecond, Metrics: metrics.Noop(), Events: events.Noop{}}
+	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, SameBackendRetryDelay: 50 * time.Millisecond, Metrics: metrics.Noop(), Events: events.Noop{}, AllowBackendPin: true}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,9 +70,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /v1/backends", s.backends)
+	mux.HandleFunc("GET /v1/models", s.models)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
 	mux.HandleFunc("GET /v1/chat/stream", s.chatWebSocket)
-	return s.withRequestID(mux)
+	return s.withCORS(s.withRequestID(mux))
 }
 
 type ctxKey struct{}
@@ -152,6 +160,8 @@ func upstreamStatus(err error) int {
 	switch {
 	case errors.Is(err, router.ErrQueueFull):
 		return http.StatusTooManyRequests
+	case errors.Is(err, router.ErrUnknownBackend):
+		return http.StatusBadRequest
 	case errors.Is(err, router.ErrNoBackend):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, context.DeadlineExceeded):
@@ -164,6 +174,8 @@ func errorType(err error) string {
 	switch {
 	case errors.Is(err, router.ErrQueueFull):
 		return "rate_limit_error"
+	case errors.Is(err, router.ErrUnknownBackend):
+		return "invalid_request_error"
 	case errors.Is(err, router.ErrNoBackend):
 		return "backend_unavailable"
 	}
@@ -231,7 +243,7 @@ func failureStatus(err error) string {
 		return events.StatusCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return events.StatusTimeout
-	case errors.Is(err, router.ErrQueueFull), errors.Is(err, router.ErrNoBackend):
+	case errors.Is(err, router.ErrQueueFull), errors.Is(err, router.ErrNoBackend), errors.Is(err, router.ErrUnknownBackend):
 		return events.StatusRejected
 	}
 	return events.StatusError
@@ -324,6 +336,12 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 	id := requestID(ctx)
+	pin, err := s.pinFrom(r)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "permission_error", err.Error())
+		return
+	}
+	ctx = router.WithPin(ctx, pin)
 	ctx, span := tracer().Start(ctx, "chat.completions", trace.WithAttributes(
 		attribute.String("infermesh.request_id", id),
 		attribute.Bool("infermesh.stream", req.Stream),
@@ -339,7 +357,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var resp backend.Response
 	var served string
 	genStart := s.now()
-	err := s.attempt(ctx, c, func(ctx context.Context, l *router.Lease) error {
+	err = s.attempt(ctx, c, func(ctx context.Context, l *router.Lease) error {
 		var err error
 		if resp, err = l.Backend.Generate(ctx, req.toBackend(id)); err != nil {
 			return err
@@ -371,6 +389,43 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: resp.Content}, FinishReason: resp.FinishReason}},
 		Usage:   toUsage(resp.Usage),
 	})
+}
+
+// pinHeader pins a request to one backend. The WebSocket endpoint takes ?backend=
+// instead, since browsers cannot set headers on a WebSocket.
+const pinHeader = "X-InferMesh-Pin-Backend"
+
+var errPinDisabled = errors.New("backend pinning is disabled on this gateway")
+
+// pinFrom returns the backend a request asks to be pinned to ("" for none).
+func (s *Server) pinFrom(r *http.Request) (string, error) {
+	pin := r.Header.Get(pinHeader)
+	if pin == "" {
+		pin = r.URL.Query().Get("backend")
+	}
+	if pin != "" && !s.AllowBackendPin {
+		return "", errPinDisabled
+	}
+	return pin, nil
+}
+
+// models lists the models the gateway can serve, in the OpenAI list format with
+// the backend that serves each. Backends that pass the request's model through
+// (no fixed model configured) are not listed.
+func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
+	type entry struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		OwnedBy string `json:"owned_by"`
+		Backend string `json:"backend"`
+	}
+	data := []entry{}
+	for _, b := range s.router.Backends() {
+		if m, ok := b.(backend.Modeled); ok && m.Model() != "" {
+			data = append(data, entry{ID: m.Model(), Object: "model", OwnedBy: "infermesh", Backend: b.Name()})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
 // backends reports per-backend routing state for debugging and dashboards.

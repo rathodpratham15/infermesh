@@ -32,6 +32,9 @@ func NewMock(name string, tokenDelay time.Duration) *Mock {
 
 func (m *Mock) Name() string { return m.name }
 
+// Model reports the fixed name the mock advertises.
+func (m *Mock) Model() string { return "mock" }
+
 func (m *Mock) SetHealthy(v bool) { m.healthy.Store(v) }
 
 func (m *Mock) Health(ctx context.Context) error {
