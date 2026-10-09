@@ -107,8 +107,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	base := strings.TrimRight(*target, "/")
-	if err := checkHealth(base); err != nil {
+	note, err := checkHealth(base)
+	if err != nil {
 		return err
+	}
+	if note != "" {
+		fmt.Fprintln(stderr, "note:", note)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -231,17 +235,23 @@ func parseLevels(s string) ([]int, error) {
 	return out, nil
 }
 
-func checkHealth(base string) error {
+// checkHealth confirms the target is reachable. A target without /healthz (a bare
+// engine such as vLLM or mlx_lm.server, benchmarked directly to measure gateway
+// overhead) answers 404 there; that is accepted with a note, any other failure is not.
+func checkHealth(base string) (note string, err error) {
 	c := &http.Client{Timeout: 5 * time.Second}
 	resp, err := c.Get(base + "/healthz")
 	if err != nil {
-		return fmt.Errorf("target not reachable: %w", err)
+		return "", fmt.Errorf("target not reachable: %w", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("target /healthz returned %d", resp.StatusCode)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return "", nil
+	case http.StatusNotFound:
+		return "target has no /healthz; assuming a bare engine and continuing", nil
 	}
-	return nil
+	return "", fmt.Errorf("target /healthz returned %d", resp.StatusCode)
 }
 
 // fetchBackends snapshots the gateway's /v1/backends (best effort) so the report

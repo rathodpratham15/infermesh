@@ -104,3 +104,31 @@ func TestRunValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestBareEngineWithoutHealthzIsAccepted(t *testing.T) {
+	mux := http.NewServeMux() // no /healthz and no /v1/backends: like a bare engine
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"a"}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	out := filepath.Join(t.TempDir(), "r.json")
+	var so, se bytes.Buffer
+	if err := run([]string{"--target", ts.URL, "--duration", "100ms", "--output", out}, &so, &se); err != nil {
+		t.Fatal(err, se.String())
+	}
+	if !strings.Contains(se.String(), "no /healthz") {
+		t.Fatalf("expected a note about the missing /healthz, got %q", se.String())
+	}
+	rep, err := bench.ReadReport(out)
+	if err != nil || rep.Meta.GatewayBefore != nil || len(rep.Levels) != 1 {
+		t.Fatalf("report: %+v %v", rep, err)
+	}
+
+	// A server that errors on /healthz is still rejected.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", 500) }))
+	defer bad.Close()
+	if err := run([]string{"--target", bad.URL, "--duration", "100ms"}, &so, &se); err == nil {
+		t.Fatal("a 500 from /healthz must still abort")
+	}
+}
