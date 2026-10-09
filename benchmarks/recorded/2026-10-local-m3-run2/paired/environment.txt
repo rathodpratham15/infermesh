@@ -1,0 +1,13 @@
+date:      2026-10-09T12:39:48Z
+git:       f049838 
+chip:      Apple M3
+cpus:      8
+memory:    16 GB
+os:        macOS 27.0.1
+power:     Now drawing from 'AC Power'  -InternalBattery-0 (id=23855203)	99%; finishing charge; 0:00 remaining present: true 
+lowpower:   lowpowermode 0
+mlx-lm:    mlx 0.32.3,mlx-lm 0.32.0,
+model:     mlx-community/Qwen2.5-0.5B-Instruct-4bit
+go:        go version go1.27.1 darwin/arm64
+gateway:   least_outstanding routing, max 6 concurrent to the engine (queue 128), 1 backend
+duration:  20s per level, warmup 3s

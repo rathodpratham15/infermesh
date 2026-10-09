@@ -57,7 +57,7 @@ curl -s -m 2 "localhost:$ENGINE_PORT/v1/models" >/dev/null || { echo "engine did
 
 echo "starting gateway..."
 BACKENDS=vllm BACKEND_VLLM_URL="http://127.0.0.1:$ENGINE_PORT" BACKEND_VLLM_MODEL="$MODEL" \
-  BACKEND_VLLM_MAX_CONCURRENT="$ENGINE_SAFE_CONCURRENCY" ROUTING_POLICY=least_outstanding LISTEN_ADDR=":$GW_PORT" LOG_LEVEL=error \
+  BACKEND_VLLM_MAX_CONCURRENT="$ENGINE_SAFE_CONCURRENCY" ROUTING_POLICY=least_outstanding LISTEN_ADDR=":$GW_PORT" LOG_LEVEL=warn \
   "$BIN/gateway" >"$OUT/gateway.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 30); do curl -s -m 2 "localhost:$GW_PORT/readyz" >/dev/null && break; sleep 1; done
