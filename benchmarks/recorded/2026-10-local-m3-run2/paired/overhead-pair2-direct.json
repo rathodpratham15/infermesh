@@ -1,0 +1,84 @@
+{
+  "tool": "inferbench",
+  "version": "dev",
+  "started_at": "2026-10-09T12:42:18.313087Z",
+  "finished_at": "2026-10-09T12:43:08.244793Z",
+  "meta": {
+    "hardware": "Apple M3 8-core, 16 GB, macOS 27.0.1; client, gateway and engine share this machine",
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "engine": "mlx-lm 0.32.0 (OpenAI-compatible stand-in; not vLLM)",
+    "notes": "paired overhead run: pair 2, direct (order: gateway direct)",
+    "target": "http://localhost:8000",
+    "client_host": {
+      "os": "darwin",
+      "arch": "arm64",
+      "num_cpu": 8,
+      "go_version": "go1.27.1"
+    }
+  },
+  "config": {
+    "concurrency": [
+      1,
+      4
+    ],
+    "duration": "20s",
+    "warmup": "3s",
+    "stream": false,
+    "stream_usage": false,
+    "max_tokens": 128,
+    "requested_model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "dataset": "benchmarks/datasets/short.jsonl",
+    "dataset_prompts": 40,
+    "timeout": "2m0s"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 20.806657958,
+      "drain_seconds": 0.806657958,
+      "requests": 18,
+      "succeeded": 18,
+      "failed": 0,
+      "requests_per_sec": 0.9375,
+      "output_tokens_per_sec": 111.375,
+      "throughput_basis": "steady",
+      "wall_requests_per_sec": 0.8651076994842,
+      "wall_output_tokens_per_sec": 100.0641239070058,
+      "input_tokens": 662,
+      "output_tokens": 2082,
+      "latency": {
+        "count": 18,
+        "mean_ms": 1155.8733609444444,
+        "min_ms": 545.571041,
+        "max_ms": 2224.480541,
+        "p50_ms": 1160.540167,
+        "p95_ms": 2224.480541,
+        "p99_ms": 2224.480541
+      }
+    },
+    {
+      "concurrency": 4,
+      "wall_seconds": 21.902672667,
+      "drain_seconds": 1.902672667,
+      "requests": 48,
+      "succeeded": 48,
+      "failed": 0,
+      "requests_per_sec": 2.375,
+      "output_tokens_per_sec": 283.75,
+      "throughput_basis": "steady",
+      "wall_requests_per_sec": 2.191513370526691,
+      "wall_output_tokens_per_sec": 251.4761592679378,
+      "input_tokens": 1778,
+      "output_tokens": 5508,
+      "latency": {
+        "count": 48,
+        "mean_ms": 1756.6448437916667,
+        "min_ms": 188.69525,
+        "max_ms": 3865.92625,
+        "p50_ms": 1451.514625,
+        "p95_ms": 3748.216584,
+        "p99_ms": 3865.92625
+      }
+    }
+  ]
+}

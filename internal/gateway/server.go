@@ -38,6 +38,9 @@ type Server struct {
 	MaxRetries int
 	// RequestTimeout bounds a whole request, including time spent queued.
 	RequestTimeout time.Duration
+	// SameBackendRetryDelay is the pause before retrying a connection-level
+	// failure on the same backend (only when no other backend is available).
+	SameBackendRetryDelay time.Duration
 	// Metrics receives request-level measurements. New installs a no-op.
 	Metrics *metrics.Metrics
 	// Events receives asynchronous telemetry events (Kafka). It is never on the
@@ -49,7 +52,7 @@ type Server struct {
 func tracer() trace.Tracer { return otel.Tracer("github.com/rathodpratham15/infermesh/gateway") }
 
 func New(r router.Router, log *slog.Logger) *Server {
-	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, Metrics: metrics.Noop(), Events: events.Noop{}}
+	return &Server{router: r, log: log, now: time.Now, MaxRetries: 1, RequestTimeout: 2 * time.Minute, SameBackendRetryDelay: 50 * time.Millisecond, Metrics: metrics.Noop(), Events: events.Noop{}}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -244,6 +247,18 @@ func (s *Server) attempt(ctx context.Context, c *call, fn func(context.Context, 
 	for n := 0; ; n++ {
 		waitStart := s.now()
 		lease, err := s.router.Acquire(ctx, tried...)
+		if err != nil && last != nil && errors.Is(err, router.ErrNoBackend) && backend.IsConnectionError(last) {
+			// Every healthy backend has already failed this request, but the failure was a
+			// transport-level one (for example a connection reset), which is often transient.
+			// Retry the same backend once more after a short pause rather than giving up.
+			// HTTP 5xx/429 are deliberately not retried this way: that would add load to a
+			// server that is already failing.
+			s.log.Warn("retrying on the same backend", "request_id", c.id, "attempt", n, "err", last)
+			if !sleepCtx(ctx, s.SameBackendRetryDelay) {
+				return last
+			}
+			lease, err = s.router.Acquire(ctx)
+		}
 		c.queue += s.now().Sub(waitStart)
 		if err != nil {
 			if last != nil && errors.Is(err, router.ErrNoBackend) {
@@ -274,6 +289,21 @@ func (s *Server) attempt(ctx context.Context, c *call, fn func(context.Context, 
 			return err
 		}
 		s.log.Warn("retrying on another backend", "request_id", c.id, "failed_backend", lease.Backend.Name(), "attempt", n+1, "err", err)
+	}
+}
+
+// sleepCtx waits for d or until ctx ends, reporting whether the full wait elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

@@ -60,8 +60,9 @@ The vLLM vs Triton + TensorRT-LLM comparison, GPU autoscaling and anything sched
 GPU machine; the runbook is in [docs/gpu-deployment.md](docs/gpu-deployment.md). Nothing in this repository fabricates
 benchmark, GPU or autoscaling results.
 
-Known gaps: no React UI yet; no authentication or per-client rate limiting; latency-aware routing is not implemented; a
-single backend does not retry a transient connection reset (documented in [docs/performance.md](docs/performance.md)).
+Known gaps: no React UI yet; no authentication or per-client rate limiting; latency-aware routing is not implemented;
+intermittent multi-second request stalls were seen on the benchmark laptop and are unexplained (see
+[docs/performance.md](docs/performance.md)).
 
 ## Documentation
 

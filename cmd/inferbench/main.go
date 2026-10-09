@@ -64,6 +64,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		rate        = fs.Float64("rate", 0, "requests/second per level (open loop); 0 = closed loop")
 		dataset     = fs.String("dataset", "", "prompts: JSONL ({\"prompt\":...}) or one per line; default is one built-in prompt")
 		stream      = fs.Bool("stream", false, "use streaming responses (enables TTFT)")
+		streamUsage = fs.Bool("stream-usage", true, "ask for token usage in streamed responses (stream_options.include_usage); disable for servers that reject it")
 		maxTokens   = fs.Int("max-tokens", 128, "max_tokens per request")
 		model       = fs.String("model", "", "model name sent in requests, also recorded in the report")
 		timeout     = fs.Duration("timeout", 2*time.Minute, "per-request timeout")
@@ -124,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	req := &bench.Requester{
 		URL: base + "/v1/chat/completions", Model: *model, MaxTokens: *maxTokens,
-		Stream: *stream, Timeout: *timeout, Client: bench.NewClient(maxC),
+		Stream: *stream, StreamUsage: *streamUsage, Timeout: *timeout, Client: bench.NewClient(maxC),
 	}
 
 	rep := &bench.Report{
@@ -135,7 +136,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			GatewayBefore: fetchBackends(base),
 		},
 		Config: bench.Config{
-			Concurrency: levels, Duration: duration.String(), Rate: *rate, Stream: *stream, MaxTokens: *maxTokens,
+			Concurrency: levels, Duration: duration.String(), Rate: *rate, Stream: *stream, StreamUsage: *streamUsage && *stream, MaxTokens: *maxTokens,
 			RequestedModel: *model, Dataset: ds.Name, DatasetPrompts: len(ds.Prompts), Timeout: timeout.String(),
 		},
 	}

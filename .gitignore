@@ -5,3 +5,6 @@ node_modules/
 benchmarks/results/
 .DS_Store
 .venv-local/
+
+# local-only prompt files (not part of the repository)
+prompts/

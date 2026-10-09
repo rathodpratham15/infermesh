@@ -27,6 +27,7 @@ bin/inferbench compare vllm.json triton.json
 | `--rate` | requests/s (open loop); `0` = closed loop | `0` |
 | `--dataset` | JSONL (`{"prompt": ...}`) or one prompt per line; prompts are used round-robin in file order | one built-in prompt |
 | `--stream` | streaming responses (enables TTFT) | off |
+| `--stream-usage` | with `--stream`, ask for token usage in the stream (`stream_options.include_usage`); `--stream-usage=false` for servers that reject the option | on |
 | `--max-tokens` / `--timeout` | request cap / per-request timeout | `128` / `2m` |
 | `--model` | model name sent upstream; also recorded | none |
 | `--hardware`, `--engine`, `--notes` | what the **server** runs on; recorded in the JSON | none |
@@ -50,10 +51,17 @@ bin/inferbench compare vllm.json triton.json
   sample (no sampling or histogram approximation).
 - **TTFT** (streaming): request sent to the first chunk with non-empty content. The initial
   `role` chunk does not count.
-- **req/s**: successful requests / wall-clock seconds from the first request to the last completion.
-- **tok/s**: output tokens / the same wall-clock seconds, aggregate across all clients. Token counts
-  are the server-reported `usage`. If a response has no usage it is counted in `missing_usage` and
-  contributes zero tokens (the table warns that tok/s undercounts); tokens are never estimated.
+- **req/s and tok/s (steady state)**: completions inside the load window, after the first 20% of it (ramp-up), divided
+  by that interval. They exclude the ramp-up and the drain of requests still in flight when the window closes. In a
+  closed loop every client always has a request in flight, so counting from t=0 would undercount by about one
+  request per client; skipping the ramp-up makes the in-flight count equal at both ends of the interval, so the
+  completions in it equal the work done in it. Token counts are the server-reported `usage`. If a response has no
+  usage it is counted in `missing_usage` and contributes zero tokens (the table warns that tok/s undercounts); tokens
+  are never estimated. If no request completes inside the steady-state window (requests slower than it), the
+  report falls back to wall-clock and says so (`throughput_basis: "wall"`).
+- **Wall-clock throughput**: the JSON also carries `wall_requests_per_sec` / `wall_output_tokens_per_sec`
+  (all successes over total wall time including ramp-up and drain), and `drain_seconds`, so the two definitions can
+  be compared. Latency and TTFT statistics cover every request that started during the load window.
 - **Failures** are counted by class (`http_503`, `http_429`, `timeout`, `connection`,
   `stream_error`, `stream_truncated`, ...) and excluded from latency and TTFT.
 - **Backend distribution**: from the gateway's `X-InferMesh-Backend` header.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs the local benchmark suite (experiments A-E, a gateway-overhead check and an overload check) on one machine:
+# Runs the local benchmark suite (experiments A-E and an overload check; the paired gateway-overhead
+# runs are SUITE=overhead) on one machine:
 # the load generator, the gateway and the engine all share it. The engine is mlx-lm serving a small
 # model on Apple Silicon: a development stand-in for vLLM, NOT vLLM and NOT a GPU. Results from this
 # script must never be presented as vLLM or Triton + TensorRT-LLM performance.
@@ -8,8 +9,11 @@
 #   DURATION=5s WARMUP=1s benchmarks/run_local.sh   # quick smoke test
 #   SUITE=overhead DURATION=20s WARMUP=3s benchmarks/run_local.sh   # paired gateway-overhead runs
 #
-# Environment overrides: OUT, DURATION, WARMUP, MODEL, MLX_PY (python with mlx-lm installed).
+# Environment overrides: OUT, DURATION, WARMUP, MODEL, MLX_PY (python with mlx-lm installed),
+# ALLOW_BATTERY=1 (run on battery power anyway; the results are then NOT comparable).
 # For meaningful numbers: plug in the charger and close other heavy applications first.
+# The script refuses to start on battery power, keeps the machine awake, and logs the power source
+# before and after every run to $OUT/power.log, so a power change mid-suite is visible afterwards.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,6 +33,14 @@ ENGINE_SAFE_CONCURRENCY=6
 BIN=bin
 mkdir -p "$OUT" "$BIN"
 
+if pmset -g batt | grep -q "Battery Power" && [ "${ALLOW_BATTERY:-0}" != 1 ]; then
+  echo "refusing to run on battery power: results would not be comparable. Plug in, or set ALLOW_BATTERY=1." >&2
+  exit 1
+fi
+caffeinate -i -w $$ &   # keep the machine from idle-sleeping while this script runs
+
+log_power() { echo "$(date -u +%FT%TZ) $1 | $(pmset -g batt | sed -n '1p;2p' | tr '\n\t' '  ')" >> "$OUT/power.log"; }
+
 pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
@@ -45,7 +57,7 @@ curl -s -m 2 "localhost:$ENGINE_PORT/v1/models" >/dev/null || { echo "engine did
 
 echo "starting gateway..."
 BACKENDS=vllm BACKEND_VLLM_URL="http://127.0.0.1:$ENGINE_PORT" BACKEND_VLLM_MODEL="$MODEL" \
-  BACKEND_VLLM_MAX_CONCURRENT="$ENGINE_SAFE_CONCURRENCY" ROUTING_POLICY=least_outstanding LISTEN_ADDR=":$GW_PORT" LOG_LEVEL=error \
+  BACKEND_VLLM_MAX_CONCURRENT="$ENGINE_SAFE_CONCURRENCY" ROUTING_POLICY=least_outstanding LISTEN_ADDR=":$GW_PORT" LOG_LEVEL=warn \
   "$BIN/gateway" >"$OUT/gateway.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 30); do curl -s -m 2 "localhost:$GW_PORT/readyz" >/dev/null && break; sleep 1; done
@@ -58,6 +70,7 @@ for _ in $(seq 1 30); do curl -s -m 2 "localhost:$GW_PORT/readyz" >/dev/null && 
   echo "memory:    $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
   echo "os:        macOS $(sw_vers -productVersion)"
   echo "power:     $(pmset -g batt | sed -n '1p;2p' | tr '\n' ' ')"
+  echo "lowpower:  $(pmset -g | grep -i lowpowermode | tr -s ' ')"
   echo "mlx-lm:    $("$MLX_PY" -m pip list 2>/dev/null | grep -E '^(mlx|mlx-lm) ' | tr -s ' ' | tr '\n' ',')"
   echo "model:     $MODEL"
   echo "go:        $(go version)"
@@ -74,7 +87,9 @@ ENGINE="http://localhost:$ENGINE_PORT"
 run() { # name target [extra flags...]
   local name="$1" target="$2"; shift 2
   echo; echo "=== $name"
+  log_power "start $name"
   "$BIN/inferbench" "${common[@]}" --target "$target" --output "$OUT/$name.json" "$@" 2>/dev/null
+  log_power "end   $name"
 }
 
 # SUITE=overhead: gateway overhead measured with PAIRED, ALTERNATING runs. Throughput on a laptop drifts by
@@ -102,12 +117,8 @@ run c-long-prompts           "$GW" --scenario benchmarks/scenarios/c-long-prompt
 run d-short-prompts          "$GW" --scenario benchmarks/scenarios/d-short-prompts.json
 run e-streaming              "$GW" --scenario benchmarks/scenarios/e-streaming.json
 
-# Gateway overhead: the same load straight at the engine and through the gateway.
-for target_name in direct gateway; do
-  target="$GW"; [ "$target_name" = direct ] && target="$ENGINE"
-  run "g-overhead-$target_name" "$target" --concurrency 1,4 --dataset benchmarks/datasets/short.jsonl --max-tokens 128 \
-    --notes "gateway-overhead check: $target_name"
-done
+# Gateway overhead is measured by the paired suite (SUITE=overhead), not here: a single
+# direct-vs-gateway pair cannot resolve a small difference under throughput drift.
 
 # Protection: the same overload sent straight at the fragile engine and through the gateway's limiter.
 for target_name in direct gateway; do

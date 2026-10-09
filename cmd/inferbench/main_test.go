@@ -60,6 +60,9 @@ func TestRunWritesReportWithContext(t *testing.T) {
 	if m.GatewayBefore == nil || m.GatewayAfter == nil || m.Host.NumCPU == 0 || m.Host.GoVersion == "" {
 		t.Fatalf("environment snapshot missing: %+v", m)
 	}
+	if !rep.Config.StreamUsage || rep.Levels[0].ThroughputBasis != "steady" {
+		t.Fatalf("stream usage / throughput basis not recorded: %+v %+v", rep.Config, rep.Levels[0])
+	}
 	if !rep.Config.Stream || rep.Levels[0].TTFT == nil || rep.Levels[0].OutputTokens == 0 {
 		t.Fatalf("streaming results missing: %+v", rep.Levels[0])
 	}
@@ -130,5 +133,18 @@ func TestBareEngineWithoutHealthzIsAccepted(t *testing.T) {
 	defer bad.Close()
 	if err := run([]string{"--target", bad.URL, "--duration", "100ms"}, &so, &se); err == nil {
 		t.Fatal("a 500 from /healthz must still abort")
+	}
+}
+
+func TestStreamUsageCanBeDisabled(t *testing.T) {
+	ts := fakeGateway(t)
+	out := filepath.Join(t.TempDir(), "r.json")
+	var so, se bytes.Buffer
+	if err := run([]string{"--target", ts.URL, "--duration", "100ms", "--stream", "--stream-usage=false", "--output", out}, &so, &se); err != nil {
+		t.Fatal(err, se.String())
+	}
+	rep, _ := bench.ReadReport(out)
+	if rep.Config.StreamUsage {
+		t.Fatal("stream_usage should be recorded as false")
 	}
 }

@@ -23,6 +23,7 @@ type Result struct {
 	HasUsage     bool
 	Backend      string
 	Err          string // empty on success; a short class such as "http_503"
+	CompletedAt  time.Time
 }
 
 // Requester sends one chat completion and measures it.
@@ -31,15 +32,24 @@ type Requester struct {
 	Model     string
 	MaxTokens int
 	Stream    bool
-	Timeout   time.Duration
-	Client    *http.Client
+	// StreamUsage asks for token usage in streamed responses (stream_options.include_usage,
+	// the standard OpenAI option). Without it, many engines send no usage when streaming and
+	// tokens/s cannot be computed. Disable it for servers that reject the option.
+	StreamUsage bool
+	Timeout     time.Duration
+	Client      *http.Client
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatBody struct {
-	Model     string        `json:"model,omitempty"`
-	Messages  []chatMessage `json:"messages"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
-	Stream    bool          `json:"stream,omitempty"`
+	Model         string         `json:"model,omitempty"`
+	Messages      []chatMessage  `json:"messages"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 }
 
 type chatMessage struct {
@@ -64,14 +74,19 @@ type respBody struct {
 
 // Do sends prompt and returns the measurement. It never returns an error:
 // failures are recorded in Result.Err so they are counted, not hidden.
-func (r *Requester) Do(ctx context.Context, prompt string) Result {
+func (r *Requester) Do(ctx context.Context, prompt string) (res Result) {
+	defer func() { res.CompletedAt = time.Now() }()
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
-	body, _ := json.Marshal(chatBody{
+	cb := chatBody{
 		Model: r.Model, MaxTokens: r.MaxTokens, Stream: r.Stream,
 		Messages: []chatMessage{{Role: "user", Content: prompt}},
-	})
+	}
+	if r.Stream && r.StreamUsage {
+		cb.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+	body, _ := json.Marshal(cb)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.URL, bytes.NewReader(body))
 	if err != nil {
 		return Result{Err: "build_request"}
@@ -85,7 +100,7 @@ func (r *Requester) Do(ctx context.Context, prompt string) Result {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	res := Result{Backend: resp.Header.Get("X-InferMesh-Backend")}
+	res = Result{Backend: resp.Header.Get("X-InferMesh-Backend")}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		res.Latency = time.Since(start)

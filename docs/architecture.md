@@ -39,7 +39,10 @@ Kubernetes. Only the engine behind the gateway changes. NVIDIA-specific componen
 4. **Stream or return.** For SSE and WebSocket the HTTP status is committed only after the first backend token, so
    early failures are ordinary JSON errors; later failures are reported in-band. Client disconnect cancels the engine call.
 5. **Retry**: a retryable failure (5xx, 429, connection error) before any output is retried on a *different* backend, up
-   to `MAX_RETRIES`. Timeouts, cancellations and 4xx are never retried.
+   to `MAX_RETRIES`. If no other backend is available and the failure was a transport-level one (for example a
+   connection reset), the same backend is retried once after a short pause (`SameBackendRetryDelay`); HTTP 5xx/429
+   from the only backend are not, since repeating them adds load to a server that is already failing. Timeouts,
+   cancellations and 4xx are never retried.
 6. **Record**: metrics, a span per attempt, and a Kafka event (off the critical path).
 
 Backend health is polled in the background and cached; routing never makes a network call to choose a backend.
