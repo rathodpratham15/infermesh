@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -235,5 +236,81 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met in time")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestPinRestrictsToOneBackend(t *testing.T) {
+	a, _ := mem("a", 1, 10)
+	b, _ := mem("b", 1, 10)
+	p := pool(RoundRobin, 0, a, b)
+	ctx := WithPin(context.Background(), "b")
+	for i := 0; i < 6; i++ {
+		l, err := p.Acquire(ctx)
+		if err != nil || l.Backend.Name() != "b" {
+			t.Fatalf("pinned to b, got %v, %v", l, err)
+		}
+		l.Release(nil)
+	}
+	// An empty pin changes nothing.
+	if WithPin(context.Background(), "") != context.Background() {
+		t.Fatal("empty pin must return the context unchanged")
+	}
+}
+
+func TestPinIsStrict(t *testing.T) {
+	a, _ := mem("a", 1, 10)
+	b, bm := mem("b", 1, 10)
+	p := pool(RoundRobin, 0, a, b)
+	ctx := WithPin(context.Background(), "b")
+
+	// Unknown backend: a distinct error that names the options.
+	_, err := p.Acquire(WithPin(context.Background(), "nope"))
+	if !errors.Is(err, ErrUnknownBackend) || !strings.Contains(err.Error(), "a, b") {
+		t.Fatalf("unknown pin: %v", err)
+	}
+
+	// The pinned backend is unhealthy: fail, do NOT fall back to the healthy one.
+	bm.SetHealthy(false)
+	p.CheckHealth(context.Background())
+	if _, err := p.Acquire(ctx); !errors.Is(err, ErrNoBackend) {
+		t.Fatalf("expected ErrNoBackend for an unhealthy pinned backend, got %v", err)
+	}
+
+	// Excluding the pinned backend (what a retry does) leaves nothing, not another backend.
+	bm.SetHealthy(true)
+	p.CheckHealth(context.Background())
+	if _, err := p.Acquire(ctx, "b"); !errors.Is(err, ErrNoBackend) {
+		t.Fatalf("pin + exclude must fail, got %v", err)
+	}
+}
+
+func TestPinnedRequestWaitsForItsBackendInsteadOfSpilling(t *testing.T) {
+	a, _ := mem("a", 1, 10)
+	b, _ := mem("b", 1, 1)
+	p := pool(RoundRobin, 1, a, b)
+	ctx := WithPin(context.Background(), "b")
+	held, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	go func() {
+		l, err := p.Acquire(ctx) // b is full; a is idle but must not be used
+		if err != nil {
+			got <- "error: " + err.Error()
+			return
+		}
+		got <- l.Backend.Name()
+		l.Release(nil)
+	}()
+	waitFor(t, func() bool { return p.QueueDepth() == 1 })
+	select {
+	case name := <-got:
+		t.Fatalf("pinned request was served by %q while its backend was full", name)
+	case <-time.After(50 * time.Millisecond):
+	}
+	held.Release(nil)
+	if name := <-got; name != "b" {
+		t.Fatalf("served by %q, want b", name)
 	}
 }

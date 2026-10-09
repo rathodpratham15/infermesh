@@ -49,6 +49,26 @@ func TestKafkaSettings(t *testing.T) {
 	}
 }
 
+func TestBrowserUISettings(t *testing.T) {
+	d, err := LoadFrom(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.CORSOrigins) != 0 || !d.AllowBackendPin {
+		t.Fatalf("defaults: CORS must be off and pinning on, got %+v / %v", d.CORSOrigins, d.AllowBackendPin)
+	}
+	c, err := LoadFrom(env(map[string]string{"CORS_ALLOWED_ORIGINS": "http://localhost:5173, https://ui.example.com ,", "ALLOW_BACKEND_PIN": "false"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.CORSOrigins) != 2 || c.CORSOrigins[0] != "http://localhost:5173" || c.CORSOrigins[1] != "https://ui.example.com" || c.AllowBackendPin {
+		t.Fatalf("unexpected: %+v pin=%v", c.CORSOrigins, c.AllowBackendPin)
+	}
+	if _, err := LoadFrom(env(map[string]string{"ALLOW_BACKEND_PIN": "sometimes"})); err == nil {
+		t.Fatal("expected an error for a non-boolean ALLOW_BACKEND_PIN")
+	}
+}
+
 func TestAllowedOrigins(t *testing.T) {
 	c, err := LoadFrom(env(map[string]string{"WS_ALLOWED_ORIGINS": "localhost:5173, example.com ,"}))
 	if err != nil {

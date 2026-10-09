@@ -47,6 +47,12 @@ Kubernetes. Only the engine behind the gateway changes. NVIDIA-specific componen
 
 Backend health is polled in the background and cached; routing never makes a network call to choose a backend.
 
+## Endpoints
+
+`POST /v1/chat/completions` (JSON or SSE), `GET /v1/chat/stream` (WebSocket), `GET /v1/models`, `GET /v1/backends`,
+`GET /healthz`, `GET /readyz`, `GET /metrics`. Browser clients use CORS and optional per-request backend pinning
+(`local-development.md`, "Browser clients").
+
 ## Backpressure and failure containment
 
 The per-backend limit is the main protection for engines. A real engine batches many requests, but some engines

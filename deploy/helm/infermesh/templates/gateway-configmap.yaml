@@ -49,6 +49,10 @@ data:
   {{ $p }}STREAM_USAGE: {{ .streamUsage | quote }}
   {{- end }}
   {{- end }}
+  ALLOW_BACKEND_PIN: {{ $g.allowBackendPin | quote }}
+  {{- with $g.corsAllowedOrigins }}
+  CORS_ALLOWED_ORIGINS: {{ . | quote }}
+  {{- end }}
   {{- with $g.wsAllowedOrigins }}
   WS_ALLOWED_ORIGINS: {{ . | quote }}
   {{- end }}

@@ -204,6 +204,12 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		attribute.String("infermesh.request_id", id), attribute.String("infermesh.model", req.Model)))
 	defer span.End()
 
+	pin, perr := s.pinFrom(r)
+	if perr != nil {
+		fail(websocket.StatusPolicyViolation, perr.Error())
+		return
+	}
+	ctx = router.WithPin(ctx, pin)
 	c := &call{id: id, model: req.Model, stream: true}
 	st, err := s.openStream(ctx, c, req)
 	if err != nil {
@@ -214,6 +220,9 @@ func (s *Server) chatWebSocket(w http.ResponseWriter, r *http.Request) {
 		code := websocket.StatusInternalError
 		if errors.Is(err, router.ErrQueueFull) || errors.Is(err, router.ErrNoBackend) {
 			code = websocket.StatusTryAgainLater
+		}
+		if errors.Is(err, router.ErrUnknownBackend) {
+			code = websocket.StatusPolicyViolation
 		}
 		fail(code, err.Error())
 		return

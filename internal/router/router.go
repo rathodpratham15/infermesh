@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,10 +17,30 @@ import (
 var (
 	// ErrNoBackend means no healthy backend (outside the excluded set) exists.
 	ErrNoBackend = errors.New("no healthy backend available")
+	// ErrUnknownBackend means a request was pinned to a backend that does not exist.
+	ErrUnknownBackend = errors.New("unknown backend")
 	// ErrQueueFull means every backend is at its concurrency limit and the
 	// wait queue is full. Callers should shed load (HTTP 429).
 	ErrQueueFull = errors.New("all backends are at capacity and the queue is full")
 )
+
+type pinKey struct{}
+
+// WithPin returns a context that makes Acquire consider only the named backend.
+// Pinning is strict: if that backend is unhealthy Acquire fails with ErrNoBackend
+// rather than falling back to another one, and a retry cannot move to a different
+// backend. An empty name returns ctx unchanged.
+func WithPin(ctx context.Context, backendName string) context.Context {
+	if backendName == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, pinKey{}, backendName)
+}
+
+func pinned(ctx context.Context) string {
+	name, _ := ctx.Value(pinKey{}).(string)
+	return name
+}
 
 type Policy string
 
@@ -149,6 +170,23 @@ func (p *Pool) Stats() []BackendStats {
 	return out
 }
 
+func (p *Pool) has(name string) bool {
+	for _, m := range p.members {
+		if m.Backend.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Pool) names() string {
+	out := make([]string, len(p.members))
+	for i, m := range p.members {
+		out[i] = m.Backend.Name()
+	}
+	return strings.Join(out, ", ")
+}
+
 func (p *Pool) QueueDepth() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -166,6 +204,10 @@ func (p *Pool) Acquire(ctx context.Context, exclude ...string) (*Lease, error) {
 	for _, n := range exclude {
 		skip[n] = true
 	}
+	pin := pinned(ctx)
+	if pin != "" && !p.has(pin) {
+		return nil, fmt.Errorf("%w %q (available: %s)", ErrUnknownBackend, pin, p.names())
+	}
 	queued := false
 	for {
 		p.mu.Lock()
@@ -175,7 +217,7 @@ func (p *Pool) Acquire(ctx context.Context, exclude ...string) (*Lease, error) {
 		var cands []*member
 		anyHealthy := false
 		for _, m := range p.members {
-			if !m.healthy || skip[m.Backend.Name()] {
+			if !m.healthy || skip[m.Backend.Name()] || (pin != "" && m.Backend.Name() != pin) {
 				continue
 			}
 			anyHealthy = true

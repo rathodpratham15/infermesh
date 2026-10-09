@@ -82,6 +82,8 @@ func run() error {
 
 	gw := gateway.New(pool, log)
 	gw.AllowedOrigins = cfg.AllowedOrigins
+	gw.CORSAllowedOrigins = cfg.CORSOrigins
+	gw.AllowBackendPin = cfg.AllowBackendPin
 	gw.MaxRetries = cfg.MaxRetries
 	gw.RequestTimeout = cfg.RequestTimeout
 	gw.Metrics = m
