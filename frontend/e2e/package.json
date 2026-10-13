@@ -1,0 +1,8 @@
+{
+  "name": "infermesh-ui-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Optional browser end-to-end test for the InferMesh console. Separate from the app so the app has no test-browser dependency.",
+  "scripts": { "test": "bash run.sh" },
+  "dependencies": { "playwright": "^1.55.0" }
+}

@@ -78,3 +78,21 @@ helm-validate: ## render the chart and validate it against Kubernetes schemas (n
 	helm template rel $(CHART) | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0
 	helm template rel $(CHART) -f $(CHART)/values-local.yaml | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0
 	helm template rel $(CHART) -f $(CHART)/values-gpu.yaml | kubeconform -strict -ignore-missing-schemas -summary -kubernetes-version 1.31.0
+
+# --- Web UI (see frontend/README.md) ---
+.PHONY: frontend-install frontend-dev frontend-test frontend-build frontend-e2e
+
+frontend-install: ## install UI dependencies (Node 20.19+ or 22.12+)
+	cd frontend && npm ci
+
+frontend-dev: ## UI dev server on http://localhost:5173 against a real gateway (run `make up` first)
+	cd frontend && VITE_MOCK=false npm run dev
+
+frontend-test: ## UI type check + unit tests
+	cd frontend && npm run lint && npm test
+
+frontend-build: ## production build of the UI into frontend/dist
+	cd frontend && npm run build
+
+frontend-e2e: ## browser end-to-end test against the real gateway (see frontend/e2e/README.md)
+	cd frontend/e2e && npm test

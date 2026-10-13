@@ -31,6 +31,18 @@ engines.
 - **Deployment**: multi-stage Dockerfiles, a Docker Compose stack, and a Helm chart (gateway, optional vLLM and Triton, Kafka,
   consumer, HPA, ServiceMonitor, dashboard).
 
+## Web UI
+
+`frontend/` is a test console (React + Vite + TypeScript + Tailwind): chat with streaming over SSE, WebSocket or plain HTTP, a
+multi-line system prompt, backend pinning, live backend fleet status, per-request latency / TTFT / tokens-per-second, and a
+session Request Log with JSON export. It has a built-in **mock mode** (clearly labelled) so it runs with no gateway.
+
+```bash
+make frontend-install && make up && make frontend-dev     # http://localhost:5173 against the Compose gateway
+```
+
+Details and the browser end-to-end test are in [frontend/README.md](frontend/README.md).
+
 ## Quick start (no GPU needed)
 
 ```bash
@@ -51,6 +63,7 @@ This was built on an Apple Silicon laptop with **no NVIDIA GPU**. Be clear-eyed 
 |---|---|
 | Gateway, routing, limits, retries, streaming, metrics, events, `inferbench` | Built and tested (unit tests with the race detector, plus live runs against a real local model and real Kafka) |
 | Docker Compose stack | Run end to end locally (mock, host model, CPU llama.cpp container) |
+| Web UI (`frontend/`) | Type-checked, built, 21 unit tests, and a **real-browser end-to-end test** (Chromium) against the real gateway checking what goes over the wire. Mock mode is simulated data and says so |
 | Helm chart on Kubernetes | Deployed to a local `kind` cluster; CPU autoscaling of the gateway observed (1 to 4 pods and back). **No GPU scheduling** |
 | vLLM on an NVIDIA GPU | Configuration only (Compose profile, Helm values). **Never run** |
 | Triton + TensorRT-LLM | Backend tested against a **fake** Triton server; image, entrypoint and Helm component validated for syntax and schema only. **Never run** |
@@ -60,7 +73,7 @@ The vLLM vs Triton + TensorRT-LLM comparison, GPU autoscaling and anything sched
 GPU machine; the runbook is in [docs/gpu-deployment.md](docs/gpu-deployment.md). Nothing in this repository fabricates
 benchmark, GPU or autoscaling results.
 
-Known gaps: no React UI yet; no authentication or per-client rate limiting; latency-aware routing is not implemented;
+Known gaps: no authentication or per-client rate limiting; latency-aware routing is not implemented;
 intermittent multi-second request stalls were seen on the benchmark laptop and are unexplained (see
 [docs/performance.md](docs/performance.md)).
 
@@ -81,6 +94,7 @@ intermittent multi-second request stalls were seen on the benchmark laptop and a
 
 ```
 cmd/            gateway, telemetry-consumer, inferbench, tritonrepo-check
+frontend/       web UI (React + Vite), unit tests, optional browser e2e
 internal/       gateway, router, backend, config, metrics, telemetry, events, consumer, bench, tritonrepo, health
 deploy/         docker/ (Dockerfile), helm/infermesh/, triton/ (image for Triton + TensorRT-LLM), grafana/, prometheus/
 benchmarks/     datasets/, scenarios/, run_local.sh, tools/, recorded/ (raw results)
