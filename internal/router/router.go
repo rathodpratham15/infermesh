@@ -90,10 +90,13 @@ type BackendStats struct {
 	Completed     uint64  `json:"completed"`
 	Failures      uint64  `json:"failures"`
 	LatencyEWMAMs float64 `json:"latency_ewma_ms"`
+	// LastError is the most recent health-probe failure; empty while the backend is healthy.
+	LastError string `json:"last_error,omitempty"`
 }
 
 type member struct {
 	Member
+	lastErr   string // last health-probe error, "" when the last probe succeeded
 	healthy   bool
 	active    int
 	completed uint64
@@ -163,7 +166,7 @@ func (p *Pool) Stats() []BackendStats {
 	for i, m := range p.members {
 		out[i] = BackendStats{
 			Name: m.Backend.Name(), Healthy: m.healthy, Active: m.active, MaxConcurrent: m.MaxConcurrent,
-			Weight: m.Weight, Completed: m.completed, Failures: m.failures,
+			Weight: m.Weight, Completed: m.completed, Failures: m.failures, LastError: m.lastErr,
 			LatencyEWMAMs: float64(m.ewma) / float64(time.Millisecond),
 		}
 	}
@@ -361,6 +364,10 @@ func (p *Pool) CheckHealth(ctx context.Context) {
 			err := m.Backend.Health(hctx)
 			p.mu.Lock()
 			defer p.mu.Unlock()
+			m.lastErr = ""
+			if err != nil {
+				m.lastErr = err.Error()
+			}
 			if ok := err == nil; ok != m.healthy {
 				m.healthy = ok
 				p.log.Info("backend health changed", "backend", m.Backend.Name(), "healthy", ok, "err", err)

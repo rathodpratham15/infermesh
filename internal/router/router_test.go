@@ -314,3 +314,21 @@ func TestPinnedRequestWaitsForItsBackendInsteadOfSpilling(t *testing.T) {
 		t.Fatalf("served by %q, want b", name)
 	}
 }
+
+func TestStatsReportLastHealthError(t *testing.T) {
+	a, am := mem("a", 1, 10)
+	p := pool(RoundRobin, 0, a)
+	if got := p.Stats()[0].LastError; got != "" {
+		t.Fatalf("no error expected before any failure, got %q", got)
+	}
+	am.SetHealthy(false)
+	p.CheckHealth(context.Background())
+	if s := p.Stats()[0]; s.Healthy || !strings.Contains(s.LastError, "unhealthy") {
+		t.Fatalf("stats after failure: %+v", s)
+	}
+	am.SetHealthy(true)
+	p.CheckHealth(context.Background())
+	if s := p.Stats()[0]; !s.Healthy || s.LastError != "" {
+		t.Fatalf("the error must clear on recovery: %+v", s)
+	}
+}

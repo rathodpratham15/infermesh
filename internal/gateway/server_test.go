@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rathodpratham15/infermesh/internal/backend"
@@ -105,15 +106,103 @@ func TestHealthAndReadiness(t *testing.T) {
 		t.Fatal("expected healthy and ready")
 	}
 	m.SetHealthy(false)
+	pool.CheckHealth(context.Background()) // readiness and routing both use the cached state, refreshed here
 	if get("/healthz") != 200 {
 		t.Fatal("liveness must not depend on backends")
 	}
 	if get("/readyz") != 503 {
 		t.Fatal("readiness should fail with no healthy backend")
 	}
-	// Routing uses cached health, refreshed by the periodic check.
-	pool.CheckHealth(context.Background())
 	if resp := post(t, ts.URL, `{"messages":[{"role":"user","content":"x"}]}`); resp.StatusCode != 503 {
 		t.Fatalf("expected 503 with no healthy backend, got %d", resp.StatusCode)
+	}
+}
+
+// healthCounter counts Health() calls so a test can tell a fresh probe from cached state.
+type healthCounter struct {
+	*backend.Mock
+	calls atomic.Int64
+}
+
+func (h *healthCounter) Health(ctx context.Context) error {
+	h.calls.Add(1)
+	return h.Mock.Health(ctx)
+}
+
+func TestReadyzAgreesWithRouting(t *testing.T) {
+	m := backend.NewMock("m", 0)
+	pool := testRouter(m)
+	ts := httptest.NewServer(New(pool, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	defer ts.Close()
+	status := func(path string) int {
+		var resp *http.Response
+		var err error
+		if path == "/v1/chat/completions" {
+			resp, err = http.Post(ts.URL+path, "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"x"}]}`))
+		} else {
+			resp, err = http.Get(ts.URL + path)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	// At every step, "ready" must mean "routing can serve a request" and vice versa.
+	agree := func(step string) {
+		t.Helper()
+		ready := status("/readyz") == 200
+		served := status("/v1/chat/completions") != http.StatusServiceUnavailable
+		if ready != served {
+			t.Fatalf("%s: /readyz ready=%v but routing serves=%v", step, ready, served)
+		}
+	}
+	agree("initial")
+	m.SetHealthy(false) // the backend just went down; nothing has re-probed yet
+	agree("backend down, cache not refreshed")
+	pool.CheckHealth(context.Background())
+	agree("cache refreshed, backend down")
+	m.SetHealthy(true)
+	agree("backend back up, cache not refreshed")
+	pool.CheckHealth(context.Background())
+	agree("cache refreshed, backend up")
+}
+
+func TestReadyzDoesNotProbeBackends(t *testing.T) {
+	h := &healthCounter{Mock: backend.NewMock("m", 0)}
+	pool := testRouter(h)
+	ts := httptest.NewServer(New(pool, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	defer ts.Close()
+	for i := 0; i < 5; i++ {
+		resp, err := http.Get(ts.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+	}
+	if n := h.calls.Load(); n != 0 {
+		t.Fatalf("/readyz made %d backend health calls; it must report cached state", n)
+	}
+}
+
+func TestReadyzReportsTheProbeError(t *testing.T) {
+	m := backend.NewMock("m", 0)
+	m.SetHealthy(false)
+	pool := testRouter(m)
+	pool.CheckHealth(context.Background())
+	ts := httptest.NewServer(New(pool, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Ready    bool              `json:"ready"`
+		Backends map[string]string `json:"backends"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != 503 || out.Ready || !strings.Contains(out.Backends["m"], "unhealthy: mock backend marked unhealthy") {
+		t.Fatalf("status=%d body=%+v", resp.StatusCode, out)
 	}
 }

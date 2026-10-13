@@ -102,20 +102,23 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz is readiness: at least one backend is healthy.
-func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
+// readyz is readiness: at least one backend is healthy. It reports the same cached health state that
+// routing uses (refreshed every HEALTH_INTERVAL), never a fresh probe. A fresh probe could say "ready"
+// while routing still treats every backend as unhealthy (and answers requests with 503) until the next
+// refresh, which would send traffic to a gateway that cannot serve it.
+func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 	status := map[string]string{}
 	ready := false
-	for _, b := range s.router.Backends() {
-		if err := b.Health(ctx); err != nil {
-			status[b.Name()] = "unhealthy: " + err.Error()
-			continue
+	for _, b := range s.router.Stats() {
+		switch {
+		case b.Healthy:
+			status[b.Name] = "ok"
+			ready = true
+		case b.LastError != "":
+			status[b.Name] = "unhealthy: " + b.LastError
+		default:
+			status[b.Name] = "unhealthy"
 		}
-		status[b.Name()] = "ok"
-		ready = true
 	}
 	code := http.StatusOK
 	if !ready {
